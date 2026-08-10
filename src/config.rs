@@ -69,7 +69,7 @@ impl Default for DeepSeekCfg {
             api_key: String::new(),
             base_url: "https://api.deepseek.com".into(),
             model: "deepseek-chat".into(),
-            system_prompt: "你是一个住在像素世界里的可爱小精灵伙伴,名字叫 Vox。用简短、口语化的中文回复,每次不超过 3 句话。回复会被语音合成朗读,不要使用列表或符号。".into(),
+            system_prompt: "你是一个住在像素世界里的可爱小精灵伙伴,名字叫 Vox。用简短、口语化的中文回复,每次不超过 3 句话。语气活泼、温暖、有点俏皮。回复会被语音合成朗读,不要使用列表或符号。句子之间用句号或感叹号分隔,方便语音流式播放。".into(),
         }
     }
 }

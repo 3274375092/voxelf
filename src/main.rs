@@ -261,7 +261,7 @@ async fn brain_loop(
                             b.run_streaming(&text2, ev_tx).await;
                         });
 
-                        let (reply, played_any) =
+                        let (reply, played_any, _) =
                             run_stream_pipeline(tts, player, ev_rx, &state, t0).await;
 
                         if !played_any {
@@ -298,14 +298,14 @@ async fn brain_loop(
 }
 
 /// 大脑事件流 → 按句 TTS → 播放队列 的流式管道。
-/// 返回 (完整回复文本, 是否有音频入队)。
+/// 返回 (完整回复文本, 是否有音频入队, 首句音频入队耗时)。
 async fn run_stream_pipeline(
     tts: &Arc<tts::Tts>,
     player: &audio::output::Player,
     ev_rx: flume::Receiver<BrainEvent>,
     state: &SharedState,
     t0: std::time::Instant,
-) -> (String, bool) {
+) -> (String, bool, Option<std::time::Duration>) {
     // TTS 单消费者工作线程(保序): 收句子 → 合成 → 回传音频
     let (tts_req_tx, tts_req_rx) = flume::unbounded::<String>();
     let (tts_done_tx, tts_done_rx) = flume::unbounded::<Option<(Vec<f32>, u32)>>();
@@ -327,6 +327,7 @@ async fn run_stream_pipeline(
     let mut played_any = false;
     let mut brain_done = false;
     let mut aborted = false;
+    let mut first_audio: Option<std::time::Duration> = None;
     // 大脑通道是否已关闭(发完 Done 后通道断开是正常现象,不能提前退出,
     // 必须等 TTS 在途任务全部回来)
     let mut brain_closed = false;
@@ -398,6 +399,9 @@ async fn run_stream_pipeline(
                         "LATENCY 收到合成音频 {:.1}s (剩余 {pending})",
                         samples.len() as f32 / rate as f32
                     );
+                    if first_audio.is_none() {
+                        first_audio = Some(t0.elapsed());
+                    }
                     player.queue(samples, rate);
                     played_any = true;
                 } else {
@@ -411,10 +415,11 @@ async fn run_stream_pipeline(
         }
     }
     tracing::info!("LATENCY 管道结束 played={played_any} pending={pending} aborted={aborted}");
-    (reply, played_any)
+    (reply, played_any, first_audio)
 }
 
-/// 按句末标点切分回复;超过 40 字无标点则硬切,保证 TTS 流式粒度。
+/// 按句末标点切分回复;无标点时按逗号软切(≥6字),超过 25 字无任何停顿则硬切。
+/// 保证 TTS 流式粒度(避免一整段攒到结尾才合成)。
 fn split_sentences(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -423,7 +428,8 @@ fn split_sentences(text: &str) -> Vec<String> {
         cur.push(c);
         chars += 1;
         let hard_break = matches!(c, '。' | '！' | '？' | '…' | '!' | '?' | '.') && chars >= 2;
-        if hard_break || chars >= 40 {
+        let soft_break = matches!(c, '，' | ',' | '、' | '；' | ';') && chars >= 6;
+        if hard_break || soft_break || chars >= 25 {
             out.push(std::mem::take(&mut cur));
             chars = 0;
         }
@@ -440,7 +446,8 @@ fn take_sentence(buf: &mut String) -> Option<String> {
     for (i, c) in buf.char_indices() {
         chars += 1;
         let hard_break = matches!(c, '。' | '！' | '？' | '…' | '!' | '?' | '.') && chars >= 2;
-        if hard_break || chars >= 40 {
+        let soft_break = matches!(c, '，' | ',' | '、' | '；' | ';') && chars >= 6;
+        if hard_break || soft_break || chars >= 25 {
             let end = i + c.len_utf8();
             let s = buf[..end].to_string();
             buf.drain(..end);
@@ -467,7 +474,7 @@ mod tests {
     fn split_sentences_hard_cuts_long() {
         let long = "啊".repeat(50);
         let parts = split_sentences(&long);
-        assert!(parts.iter().all(|p| p.chars().count() <= 40));
+        assert!(parts.iter().all(|p| p.chars().count() <= 25));
         assert_eq!(parts.iter().map(|p| p.chars().count()).sum::<usize>(), 50);
     }
 
@@ -518,7 +525,7 @@ mod tests {
             let _ = ev_tx.send(BrainEvent::Done(text2.clone()));
         });
 
-        let (reply, played) = super::run_stream_pipeline(
+        let (reply, played, _) = super::run_stream_pipeline(
             &tts,
             &player,
             ev_rx,
@@ -534,6 +541,58 @@ mod tests {
         assert_eq!(reply.chars().count(), text.chars().count(), "回复文本应完整");
 
         // 等播放结束(验证真的在播)
+        let mut waited = 0.0f32;
+        while !player.is_idle() && waited < 30.0 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            waited += 0.1;
+        }
+        assert!(player.is_idle(), "播放应在 30s 内结束");
+    }
+
+    /// 无句号回复也必须在流式过程中出声,不能等全部转换完成。
+    /// 慢速流式(150ms/字)模拟真实 LLM 节奏,只有逗号、没有句末标点。
+    #[tokio::test]
+    async fn stream_pipeline_incremental_no_punct() {
+        use crate::audio::output::Player;
+        use crate::brain::BrainEvent;
+        use crate::config::Config;
+        use crate::state::{SharedState, UiState};
+        use crate::tts;
+        use std::sync::{Arc, Mutex};
+
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .try_init();
+        let cfg = Config::load().expect("config 加载失败");
+        let tts = Arc::new(tts::Tts::new(&cfg.models).expect("TTS 初始化失败"));
+        let player = Arc::new(Player::new().expect("播放器初始化失败"));
+        let state: SharedState = Arc::new(Mutex::new(UiState::default()));
+
+        // 只有逗号的长回复: 逗号软切(≥6字)保证第一段尽早合成
+        let text = "今天天气不错,明天会下雨记得带伞,出门前看一下天气预报,晚上早点回家";
+        let (ev_tx, ev_rx) = flume::unbounded::<BrainEvent>();
+        let text2 = text.to_string();
+        tokio::spawn(async move {
+            for c in text2.chars() {
+                let _ = ev_tx.send(BrainEvent::Delta(c.to_string()));
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            }
+            let _ = ev_tx.send(BrainEvent::Done(text2.clone()));
+        });
+
+        let t0 = std::time::Instant::now();
+        let (reply, played, first_audio) =
+            super::run_stream_pipeline(&tts, &player, ev_rx, &state, t0).await;
+        let total = t0.elapsed();
+        assert!(played, "应有音频入队播放!");
+        assert_eq!(reply.chars().count(), text.chars().count(), "回复文本应完整");
+        let fa = first_audio.expect("应记录首句入队时间");
+        // 关键断言: 首句入队必须远早于管道结束(没有攒到结尾才出声)
+        assert!(
+            fa < total - std::time::Duration::from_millis(1500),
+            "首句入队 {fa:?} 应比管道结束 {total:?} 早至少 1.5s(疑似等全部转换)"
+        );
+
         let mut waited = 0.0f32;
         while !player.is_idle() && waited < 30.0 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
