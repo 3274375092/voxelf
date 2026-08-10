@@ -261,96 +261,10 @@ async fn brain_loop(
                             b.run_streaming(&text2, ev_tx).await;
                         });
 
-                        // TTS 单消费者工作线程(保序): 收句子 → 合成 → 回传音频
-                        let (tts_req_tx, tts_req_rx) = flume::unbounded::<String>();
-                        let (tts_done_tx, tts_done_rx) =
-                            flume::unbounded::<Option<(Vec<f32>, u32)>>();
-                        let tts_worker = tts.clone();
-                        tokio::spawn(async move {
-                            while let Ok(s) = tts_req_rx.recv_async().await {
-                                let tts = tts_worker.clone();
-                                let out = tokio::task::spawn_blocking(move || tts.synthesize(&s))
-                                    .await
-                                    .ok()
-                                    .flatten();
-                                let _ = tts_done_tx.send(out);
-                            }
-                        });
+                        let (reply, played_any) =
+                            run_stream_pipeline(tts, player, ev_rx, &state, t0).await;
 
-                        let mut reply = String::new();
-                        let mut sentence_buf = String::new();
-                        let mut pending = 0usize;
-                        let mut played_any = false;
-                        let mut brain_done = false;
-                        let mut aborted = false;
-
-                        while !aborted {
-                            tokio::select! {
-                                ev = ev_rx.recv_async() => match ev {
-                                    Ok(BrainEvent::Delta(d)) => {
-                                        reply.push_str(&d);
-                                        sentence_buf.push_str(&d);
-                                        // 气泡实时更新
-                                        if let Ok(mut s) = state.lock() {
-                                            s.reply_text = reply.clone();
-                                        }
-                                        while let Some(s) = take_sentence(&mut sentence_buf) {
-                                            pending += 1;
-                                            let _ = tts_req_tx.send(s);
-                                        }
-                                    }
-                                    Ok(BrainEvent::Done(_)) => {
-                                        if !sentence_buf.trim().is_empty() {
-                                            pending += 1;
-                                            let _ = tts_req_tx.send(std::mem::take(&mut sentence_buf));
-                                        }
-                                        brain_done = true;
-                                        if pending == 0 {
-                                            break;
-                                        }
-                                    }
-                                    Ok(BrainEvent::Err(e)) => {
-                                        tracing::error!("大脑错误: {e}");
-                                        if played_any {
-                                            brain_done = true;
-                                            if pending == 0 {
-                                                break;
-                                            }
-                                        } else {
-                                            set_phase_error(&state, e);
-                                            aborted = true;
-                                        }
-                                    }
-                                    Err(_) => break,
-                                },
-                                audio = tts_done_rx.recv_async() => {
-                                    if let Ok(Some((mut samples, rate))) = audio {
-                                        if played_any {
-                                            // 句间停顿 0.25s
-                                            let pause = vec![0f32; rate as usize / 4];
-                                            samples.splice(0..0, pause);
-                                        }
-                                        if !played_any {
-                                            tracing::info!(
-                                                "LATENCY 识别完成->首句开播 {:.2}s",
-                                                t0.elapsed().as_secs_f32()
-                                            );
-                                            if let Ok(mut s) = state.lock() {
-                                                s.phase = Phase::Speaking;
-                                            }
-                                        }
-                                        player.queue(samples, rate);
-                                        played_any = true;
-                                    }
-                                    pending = pending.saturating_sub(1);
-                                    if brain_done && pending == 0 {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        if !played_any && !aborted {
+                        if !played_any {
                             set_phase_error(&state, "语音合成失败".into());
                             continue;
                         }
@@ -381,6 +295,123 @@ async fn brain_loop(
             }
         }
     }
+}
+
+/// 大脑事件流 → 按句 TTS → 播放队列 的流式管道。
+/// 返回 (完整回复文本, 是否有音频入队)。
+async fn run_stream_pipeline(
+    tts: &Arc<tts::Tts>,
+    player: &audio::output::Player,
+    ev_rx: flume::Receiver<BrainEvent>,
+    state: &SharedState,
+    t0: std::time::Instant,
+) -> (String, bool) {
+    // TTS 单消费者工作线程(保序): 收句子 → 合成 → 回传音频
+    let (tts_req_tx, tts_req_rx) = flume::unbounded::<String>();
+    let (tts_done_tx, tts_done_rx) = flume::unbounded::<Option<(Vec<f32>, u32)>>();
+    let tts_worker = tts.clone();
+    tokio::spawn(async move {
+        while let Ok(s) = tts_req_rx.recv_async().await {
+            let tts = tts_worker.clone();
+            let out = tokio::task::spawn_blocking(move || tts.synthesize(&s))
+                .await
+                .ok()
+                .flatten();
+            let _ = tts_done_tx.send(out);
+        }
+    });
+
+    let mut reply = String::new();
+    let mut sentence_buf = String::new();
+    let mut pending = 0usize;
+    let mut played_any = false;
+    let mut brain_done = false;
+    let mut aborted = false;
+    // 大脑通道是否已关闭(发完 Done 后通道断开是正常现象,不能提前退出,
+    // 必须等 TTS 在途任务全部回来)
+    let mut brain_closed = false;
+
+    while !aborted {
+        tokio::select! {
+            ev = ev_rx.recv_async(), if !brain_closed => match ev {
+                Ok(BrainEvent::Delta(d)) => {
+                    reply.push_str(&d);
+                    sentence_buf.push_str(&d);
+                    // 气泡实时更新
+                    if let Ok(mut s) = state.lock() {
+                        s.reply_text = reply.clone();
+                    }
+                    while let Some(s) = take_sentence(&mut sentence_buf) {
+                        pending += 1;
+                        let _ = tts_req_tx.send(s);
+                    }
+                }
+                Ok(BrainEvent::Done(_)) => {
+                    if !sentence_buf.trim().is_empty() {
+                        pending += 1;
+                        let _ = tts_req_tx.send(std::mem::take(&mut sentence_buf));
+                    }
+                    brain_done = true;
+                    brain_closed = true;
+                    if pending == 0 {
+                        break;
+                    }
+                }
+                Ok(BrainEvent::Err(e)) => {
+                    tracing::error!("大脑错误: {e}");
+                    brain_closed = true;
+                    if played_any {
+                        brain_done = true;
+                        if pending == 0 {
+                            break;
+                        }
+                    } else {
+                        set_phase_error(state, e);
+                        aborted = true;
+                    }
+                }
+                Err(_) => {
+                    // 通道断开(大脑任务结束): 若有 TTS 在途则继续等
+                    brain_closed = true;
+                    if pending == 0 {
+                        break;
+                    }
+                }
+            },
+            audio = tts_done_rx.recv_async() => {
+                if let Ok(Some((mut samples, rate))) = audio {
+                    if played_any {
+                        // 句间停顿 0.25s
+                        let pause = vec![0f32; rate as usize / 4];
+                        samples.splice(0..0, pause);
+                    }
+                    if !played_any {
+                        tracing::info!(
+                            "LATENCY 识别完成->首句开播 {:.2}s",
+                            t0.elapsed().as_secs_f32()
+                        );
+                        if let Ok(mut s) = state.lock() {
+                            s.phase = Phase::Speaking;
+                        }
+                    }
+                    tracing::info!(
+                        "LATENCY 收到合成音频 {:.1}s (剩余 {pending})",
+                        samples.len() as f32 / rate as f32
+                    );
+                    player.queue(samples, rate);
+                    played_any = true;
+                } else {
+                    tracing::warn!("LATENCY 收到空/失败音频结果 (pending {pending})");
+                }
+                pending = pending.saturating_sub(1);
+                if brain_done && pending == 0 {
+                    break;
+                }
+            }
+        }
+    }
+    tracing::info!("LATENCY 管道结束 played={played_any} pending={pending} aborted={aborted}");
+    (reply, played_any)
 }
 
 /// 按句末标点切分回复;超过 40 字无标点则硬切,保证 TTS 流式粒度。
@@ -453,6 +484,62 @@ mod tests {
         let rest = take_sentence(&mut buf);
         assert!(rest.is_none() || !rest.unwrap().trim().is_empty());
         assert!(buf.is_empty(), "缓冲应被取空: {buf}");
+    }
+
+    /// 复现测试: 模拟大脑流式推 Delta,验证"合成结果能否回到播放循环"。
+    /// 用户反馈: TTS 合成正常但播放不出,程序报"语音合成失败"。
+    #[tokio::test]
+    async fn stream_pipeline_plays_audio() {
+        use crate::audio::output::Player;
+        use crate::brain::BrainEvent;
+        use crate::config::Config;
+        use crate::state::{SharedState, UiState};
+        use crate::tts;
+        use std::sync::{Arc, Mutex};
+
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .try_init();
+
+        let cfg = Config::load().expect("config 加载失败");
+        let tts = Arc::new(tts::Tts::new(&cfg.models).expect("TTS 初始化失败"));
+        let player = Arc::new(Player::new().expect("播放器初始化失败"));
+        let state: SharedState = Arc::new(Mutex::new(UiState::default()));
+
+        let (ev_tx, ev_rx) = flume::unbounded::<BrainEvent>();
+        // 模拟 LLM 流式: 逐字推送 Delta,最后 Done
+        let text = "你好呀!我是你的像素伙伴小奶蛙。今天天气不错呢?";
+        let text2 = text.to_string();
+        tokio::spawn(async move {
+            for c in text2.chars() {
+                let _ = ev_tx.send(BrainEvent::Delta(c.to_string()));
+                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            }
+            let _ = ev_tx.send(BrainEvent::Done(text2.clone()));
+        });
+
+        let (reply, played) = super::run_stream_pipeline(
+            &tts,
+            &player,
+            ev_rx,
+            &state,
+            std::time::Instant::now(),
+        )
+        .await;
+        {
+            let st = state.lock().unwrap();
+            tracing::warn!("DIAG reply={reply:?} played={played} reply_text={:?}", st.reply_text);
+        }
+        assert!(played, "应有音频入队播放!");
+        assert_eq!(reply.chars().count(), text.chars().count(), "回复文本应完整");
+
+        // 等播放结束(验证真的在播)
+        let mut waited = 0.0f32;
+        while !player.is_idle() && waited < 30.0 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            waited += 0.1;
+        }
+        assert!(player.is_idle(), "播放应在 30s 内结束");
     }
 }
 
