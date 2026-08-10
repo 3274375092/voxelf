@@ -4,53 +4,59 @@ use crate::state::Phase;
 
 pub const SIZE: usize = 32;
 
-/// 基础小人 32x32(代码内像素画,每行恰好 32 字符)。
-/// 字符含义: . 透明 | O 轮廓 | S 皮肤 | H 头发 | B 身体 | E 眼睛 | C 腮红 | F 鞋子
+/// 奶龙风格小胖龙 32x32(原创,非 IP 原图;每行恰好 32 字符)。
+/// 字符含义: . 透明 | O 轮廓 | B 身体(奶黄橙) | D 阴影 | W 奶油肚皮/高光
+///           E 眼睛 | H 眼神光 | C 腮红 | M 嘴 | F 脚
 const ROWS: [&str; SIZE] = [
     "................................",
     "................................",
     "................................",
     "................................",
-    "................................",
     ".............OOOOOO.............",
-    "...........OOOOOOOOOO...........",
-    "...........OOHHHHHHOO...........",
-    "...........OHHHHHHHHO...........",
-    "..........OHHSSSSSHHOO..........",
-    ".........OHHSSSSSSSHOO..........",
-    ".........OHHSSSSSSSSHO..........",
-    ".........OHSSSSSSSSSSHO.........",
-    "......OHSSEESSSSSSEESSSSHO......",
-    "........OHSSSSSSSSSSSSSHO.......",
-    ".....OHSSCCSSSSSSCCSSSSSSHO.....",
-    "......OHSSSMMMMMMMSSSSSHO.......",
-    ".......OHHSSSSSSSSSSHHHO........",
-    "..........OHHHHHHHHHHO..........",
-    ".........OOOHHHHHHHHOOO.........",
-    "..........OOOOOOOOOOO...........",
     "...........OBBBBBBBBO...........",
-    "...........OBBBBBBBBO...........",
-    "...........OBBBBBBBBO...........",
-    "..........OOBBBBBBBBOO..........",
-    "..........OOBBBBBBBBOO..........",
-    "...........OBBBBBBBBO...........",
-    "...........OBBBBBBBBO...........",
-    "...........OBBBBBBBO............",
-    "...........OBBBBBBBO............",
-    "..........OFFFFFFFFFO...........",
-    "..........OFFFFFFFFFO...........",
+    "..........OBBBBBBBBBBO..........",
+    ".........OBBBBBBBBBBBBO.........",
+    "........OBBBBBBBBBBBBBBO........",
+    "........OBBBBBBBBBBBBBBBO.......",
+    ".......OBBBBBBBBBBBBBBBBO.......",
+    ".......OBBEHBBBBBBBEHBBBO.......",
+    "......OBBEEBBBBBBBBEEBBBO.......",
+    "......OBBEEBBBBBBBBEEBBBO.......",
+    ".......OBBCBBBBBBBBBCBBO........",
+    ".......OBBWWBBBBBBWWBBBO........",
+    ".......OBBWWWMMMMMWWWBBO........",
+    ".......OBBWWWWWWWWWWBBO.........",
+    ".......OBBBBBBBBBBBBBBO.........",
+    "....WW.....OBBBBBBBBBBO...WW....",
+    ".....WW......OBBBBBBBO...WW.....",
+    "..........OBBBBBBBBO............",
+    "........OOOOBBBBBBBBOOOO........",
+    ".......OBBOBBBBBBBBOBBO.........",
+    ".......OBBOBBBBBBBBOBBO.........",
+    ".......OBBOBBBBBBBBOBBO.........",
+    "........OOOBBBBBBBBOOO..........",
+    "..........OBBBBBBBBBO...........",
+    "..........OBBBBBBBBBO...........",
+    "..........OBFFFFFFFBOO..........",
+    "...........OFFFFFFFFO...........",
+    "................................",
 ];
 
-/// 眼睛在基础网格中的位置(两枚 2x2)
-const EYES: [(usize, usize); 4] = [(10, 13), (11, 13), (18, 13), (19, 13)];
-/// 聆听时竖起的耳朵(紧贴头部两侧)
+/// 眼睛所在的格子(眨眼时替换为身体色)
+const EYES: [(usize, usize); 8] = [
+    (9, 12), (10, 12), (9, 13), (10, 13),
+    (19, 12), (20, 12), (19, 13), (20, 13),
+];
+/// 眼神光(睁眼时保留,闭眼时消失)
+const HIGHLIGHTS: [(usize, usize); 2] = [(11, 11), (20, 11)];
+/// 聆听时头顶竖起的小耳羽(奶油色)
 const EARS: [(usize, usize); 8] = [
-    (6, 10), (7, 10), (6, 11), (7, 11),
-    (24, 10), (25, 10), (24, 11), (25, 11),
+    (9, 9), (10, 9), (9, 10), (10, 10),
+    (21, 9), (22, 9), (21, 10), (22, 10),
 ];
 /// 嘴巴所在行与列范围
 const MOUTH_ROW: usize = 16;
-const MOUTH_COLS: std::ops::Range<usize> = 11..18;
+const MOUTH_COLS: std::ops::Range<usize> = 13..18;
 
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -62,19 +68,28 @@ pub struct Palette {
     pub eye: Color,
     pub cheek: Color,
     pub feet: Color,
+    /// 奶油肚皮/耳羽(原 skin 槽位,兼容旧代码)
+    pub cream: Color,
+    /// 眼神光
+    pub highlight: Color,
+    /// 嘴内
+    pub mouth: Color,
 }
 
 impl Default for Palette {
     fn default() -> Self {
         Self {
-            outline: Color::from_hex(0x241c3c),
-            skin: Color::from_hex(0xffd9a0),
-            hair: Color::from_hex(0x7a4a2b),
-            body: Color::from_hex(0xff7e67),
-            body_dark: Color::from_hex(0xe05f50),
-            eye: Color::from_hex(0x241c3c),
-            cheek: Color::from_hex(0xffb3a7),
-            feet: Color::from_hex(0x4a5a7a),
+            outline: Color::from_hex(0x4a2f1e),
+            skin: Color::from_hex(0xfff3d6),
+            hair: Color::from_hex(0xffc94d),
+            body: Color::from_hex(0xffc94d),
+            body_dark: Color::from_hex(0xf5a623),
+            eye: Color::from_hex(0x3a2417),
+            cheek: Color::from_hex(0xffb38a),
+            feet: Color::from_hex(0xe08f2e),
+            cream: Color::from_hex(0xfff3d6),
+            highlight: Color::from_hex(0xffffff),
+            mouth: Color::from_hex(0x7a4a2b),
         }
     }
 }
@@ -96,32 +111,29 @@ impl Sprite {
         Self { grid }
     }
 
-    /// 眼睛开合: 1.0 全开, 0.0 全闭(眨眼中), 中间值半闭
+    /// 眼睛开合: 1.0 全开, 0.0 全闭(眨眼中)。闭眼时替换为身体色。
     pub fn eyes(&mut self, open: f32) {
         for &(x, y) in &EYES {
-            self.grid[y][x] = if open > 0.75 {
-                'E'
-            } else if open > 0.25 {
-                'S'
-            } else {
-                'S'
-            };
+            self.grid[y][x] = if open > 0.75 { 'E' } else { 'B' };
+        }
+        for &(x, y) in &HIGHLIGHTS {
+            self.grid[y][x] = if open > 0.75 { 'H' } else { 'B' };
         }
     }
 
-    /// 嘴巴张开程度: 0.0 闭嘴, 1.0 大张嘴
+    /// 嘴巴张开程度: 0.0 闭嘴(奶油色), 1.0 大张嘴
     pub fn mouth(&mut self, open: f32) {
-        let n = (open * 7.0).round() as usize;
-        let pad = (7 - n) / 2;
+        let n = (open * 5.0).round() as usize;
+        let pad = (5 - n) / 2;
         for (i, x) in MOUTH_COLS.enumerate() {
-            self.grid[MOUTH_ROW][x] = if n > 0 && i >= pad && i < pad + n { 'M' } else { 'S' };
+            self.grid[MOUTH_ROW][x] = if n > 0 && i >= pad && i < pad + n { 'M' } else { 'W' };
         }
     }
 
-    /// 竖起耳朵(聆听)
+    /// 头顶小耳羽(聆听时竖起)
     pub fn ears(&mut self, on: bool) {
         for &(x, y) in &EARS {
-            self.grid[y][x] = if on { 'S' } else { '.' };
+            self.grid[y][x] = if on { 'W' } else { 'B' };
         }
     }
 }
@@ -162,7 +174,7 @@ pub fn build_frame(phase: Phase, t: f32, level: f32) -> Sprite {
             s.ears(false);
         }
         Phase::Error => {
-            // 低落: 全闭眼 + 嘴角下撇(用 0 宽度嘴)
+            // 低落: 全闭眼 + 闭嘴
             s.eyes(0.0);
             s.mouth(0.0);
             s.ears(false);
@@ -178,13 +190,16 @@ pub fn draw(sprite: &Sprite, x: f32, y: f32, scale: f32, palette: &Palette) {
         for (col, &c) in line.iter().enumerate() {
             let color = match c {
                 'O' => palette.outline,
-                'S' => palette.skin,
-                'H' => palette.hair,
                 'B' => palette.body,
                 'D' => palette.body_dark,
+                'W' => palette.cream,
                 'E' => palette.eye,
+                'H' => palette.highlight,
                 'C' => palette.cheek,
+                'M' => palette.mouth,
                 'F' => palette.feet,
+                // 旧皮肤字符,兼容映射
+                'S' => palette.skin,
                 _ => continue,
             };
             macroquad::shapes::draw_rectangle(

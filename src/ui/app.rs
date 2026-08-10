@@ -290,6 +290,31 @@ pub fn run_smoke(cfg: Config, out: &str) {
         let mut app = App::new(state, load_font());
         app.draw();
 
+        // 六个状态并排预览(每格一帧,方便检查各状态形象)
+        let states = [
+            Phase::Idle,
+            Phase::Listening,
+            Phase::Thinking,
+            Phase::Speaking,
+            Phase::Working,
+            Phase::Error,
+        ];
+        let preview_scale = 3.0;
+        let preview_y = screen_height() - 160.0;
+        for (i, &ph) in states.iter().enumerate() {
+            let cx = 90.0 + i as f32 * 135.0;
+            let sp = sprite::build_frame(ph, 0.35, 0.0);
+            sprite::draw(&sp, cx - 16.0 * preview_scale, preview_y, preview_scale, &app.palette);
+            if let Some(f) = app.font.as_ref() {
+                draw_text_ex(
+                    ph.label(),
+                    cx - 14.0,
+                    preview_y + 108.0,
+                    TextParams { font: Some(f), font_size: 14, color: phase_color(ph), ..Default::default() },
+                );
+            }
+        }
+
         // 必须在 next_frame 之前读(此时绘制批尚未被下一帧清空)
         let mut img = get_screen_data();
         // miniquad 读回是上下颠倒的,翻正后再保存
