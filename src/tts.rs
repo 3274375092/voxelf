@@ -1,9 +1,12 @@
 use anyhow::{Context, Result};
-use sherpa_onnx::{GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsKokoroModelConfig, OfflineTtsModelConfig};
+use sherpa_onnx::{
+    GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsKokoroModelConfig,
+    OfflineTtsModelConfig, OfflineTtsVitsModelConfig,
+};
 
 use crate::config::ModelCfg;
 
-/// Kokoro TTS 封装。线程安全(单对象),内部 C 调用是阻塞的,调用方放 spawn_blocking。
+/// TTS 引擎封装。线程安全(单对象),内部 C 调用是阻塞的,调用方放 spawn_blocking。
 pub struct Tts {
     engine: OfflineTts,
     voice_id: i32,
@@ -11,6 +14,13 @@ pub struct Tts {
 
 impl Tts {
     pub fn new(cfg: &ModelCfg) -> Result<Self> {
+        match cfg.tts_kind.as_str() {
+            "vits" => Self::new_vits(cfg),
+            _ => Self::new_kokoro(cfg),
+        }
+    }
+
+    fn new_kokoro(cfg: &ModelCfg) -> Result<Self> {
         let dir = cfg.tts_dir.as_os_str().to_string_lossy().into_owned();
         let mut kokoro = OfflineTtsKokoroModelConfig::default();
         kokoro.model = Some(format!("{dir}/{}", cfg.tts_model_file));
@@ -38,7 +48,47 @@ impl Tts {
                 2
             }
         };
-        tracing::info!("TTS 初始化完成: 采样率 {} 音色 {}", engine.sample_rate(), cfg.tts_voice);
+        tracing::info!(
+            "TTS 初始化完成(kokoro): 采样率 {} 音色 {}",
+            engine.sample_rate(),
+            cfg.tts_voice
+        );
+        Ok(Self { engine, voice_id })
+    }
+
+    fn new_vits(cfg: &ModelCfg) -> Result<Self> {
+        let dir = cfg.tts_dir.as_os_str().to_string_lossy().into_owned();
+        let mut vits = OfflineTtsVitsModelConfig::default();
+        vits.model = Some(format!("{dir}/{}", cfg.tts_model_file));
+        vits.tokens = Some(format!("{dir}/tokens.txt"));
+        vits.lexicon = Some(format!("{dir}/lexicon.txt"));
+        vits.dict_dir = Some(format!("{dir}/dict"));
+
+        let mut model = OfflineTtsModelConfig::default();
+        model.vits = vits;
+        model.num_threads = cfg.tts_threads;
+
+        let mut config = OfflineTtsConfig::default();
+        config.model = model;
+        // 中文文本规范化 FST(数字/日期/多音字);失败时降级为无 FST
+        let fsts = format!(
+            "{dir}/phone.fst,{dir}/date.fst,{dir}/number.fst,{dir}/new_heteronym.fst"
+        );
+        config.rule_fsts = Some(fsts);
+
+        let engine = OfflineTts::create(&config).context("创建 VITS TTS 引擎失败")?;
+        let voice_id: i32 = cfg
+            .tts_voice
+            .parse()
+            .unwrap_or_else(|_| {
+                tracing::warn!("vits 音色需为数字(speaker id),收到 {},使用 0", cfg.tts_voice);
+                0
+            });
+        tracing::info!(
+            "TTS 初始化完成(vits): 采样率 {} speaker {}",
+            engine.sample_rate(),
+            voice_id
+        );
         Ok(Self { engine, voice_id })
     }
 

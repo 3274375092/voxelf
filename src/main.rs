@@ -45,6 +45,8 @@ enum Cmd {
     Latency { text: Option<String> },
     /// 流式朗读测试: 分句合成并播放(验证 TTS 流式)
     Speak { text: Option<String> },
+    /// TTS 基准: 预热 + 稳态合成耗时(对比 kokoro/vits)
+    TtsBench,
 }
 
 fn main() -> Result<()> {
@@ -118,6 +120,29 @@ fn main() -> Result<()> {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
             tracing::info!("播放完成");
+            Ok(())
+        }
+        Cmd::TtsBench => {
+            let engine = tts::Tts::new(&cfg.models)?;
+            // 预热(首个调用含模型初始化开销)
+            let t0 = std::time::Instant::now();
+            let _ = engine.synthesize("嗯");
+            println!("预热(首个调用): {:.2}s", t0.elapsed().as_secs_f32());
+            for text in [
+                "今天天气很好我们去公园散步吧",
+                "你能帮我查一下明天的天气吗",
+                "好的那我们明天见",
+            ] {
+                let t0 = std::time::Instant::now();
+                if let Some((samples, rate)) = engine.synthesize(text) {
+                    println!(
+                        "稳态 {:.2}s ({}字 -> 音频 {:.1}s)",
+                        t0.elapsed().as_secs_f32(),
+                        text.chars().count(),
+                        samples.len() as f32 / rate as f32
+                    );
+                }
+            }
             Ok(())
         }
     }

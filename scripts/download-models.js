@@ -46,6 +46,12 @@ const JOBS = [
     dest: 'assets/models/kokoro',
   },
   {
+    name: 'VITS TTS zh (快, 音质略降)',
+    base: `${MIRROR}/csukuangfj/sherpa-onnx-vits-zh-ll/resolve/main/`,
+    files: [...collectHfFileList('csukuangfj/sherpa-onnx-vits-zh-ll')],
+    dest: 'assets/models/vits-zh',
+  },
+  {
     name: 'Noto Sans SC font',
     base: `${JSDELIVR}/gh/google/fonts@main/ofl/notosanssc/`,
     files: ['NotoSansSC%5Bwght%5D.ttf'],

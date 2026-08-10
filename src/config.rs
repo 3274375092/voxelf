@@ -42,6 +42,8 @@ pub struct ModelCfg {
     pub tts_dir: PathBuf,
     pub tts_model_file: String,
     pub tts_voice: String,
+    /// kokoro | vits(vits-zh 更快但音质略降)
+    pub tts_kind: String,
     pub asr_threads: i32,
     pub tts_threads: i32,
     /// VAD 语音/静音判定阈值(0-1),越低越不容易吞句尾
@@ -91,6 +93,7 @@ impl Default for ModelCfg {
             tts_dir: "assets/models/kokoro".into(),
             tts_model_file: "model.int8.onnx".into(),
             tts_voice: "xiaoxiao".into(),
+            tts_kind: "kokoro".into(),
             asr_threads: 2,
             tts_threads: 4,
             vad_threshold: 0.3,
