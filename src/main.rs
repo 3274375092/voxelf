@@ -6,6 +6,8 @@ mod state;
 mod tts;
 mod ui;
 
+use config::Config;
+
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -53,7 +55,8 @@ fn main() -> Result<()> {
         Cmd::Run => run_app(cfg),
         Cmd::Smoke { out } => {
             let path = out.unwrap_or_else(|| "smoke.png".to_string());
-            run_smoke(cfg, &path)
+            ui::app::run_smoke(cfg, &path);
+            Ok(())
         }
         Cmd::AsrFile { wav } => asr::run_asr_file(&cfg.models, Path::new(&wav)),
         Cmd::Tts { text, out } => {
@@ -95,7 +98,7 @@ fn run_app(cfg: Config) -> Result<()> {
     // 检查模型是否齐全
     let models_ok = check_models(&cfg);
     if !models_ok {
-        set_status(&state, "模型未下载,先运行: node scripts/download-models.js");
+        set_status(&state, "模型未下载,先运行: node scripts/download-models.js".into());
     }
 
     let (asr_tx, asr_rx) = flume::unbounded::<audio::input::AudioChunk>();
@@ -116,6 +119,7 @@ fn run_app(cfg: Config) -> Result<()> {
 
     // 大脑 + TTS + 播放循环(tokio runtime 线程)
     let brain_state = state.clone();
+    let brain_cfg = cfg.clone();
     thread::Builder::new()
         .name("brain-loop".into())
         .spawn(move || {
@@ -123,17 +127,11 @@ fn run_app(cfg: Config) -> Result<()> {
                 .enable_all()
                 .build()
                 .expect("创建 tokio runtime 失败");
-            rt.block_on(brain_loop(cfg, ev_rx, brain_state));
+            rt.block_on(brain_loop(brain_cfg, ev_rx, brain_state));
         })
         .context("启动大脑线程失败")?;
 
-    pollster::block_on(ui::app::run_ui(cfg, state));
-    Ok(())
-}
-
-fn run_smoke(cfg: Config, out: &str) -> Result<()> {
-    let out = out.to_string();
-    pollster::block_on(ui::app::run_smoke(cfg, &out));
+    ui::app::run_ui(cfg, state);
     Ok(())
 }
 
@@ -232,7 +230,8 @@ async fn brain_loop(
                         // TTS 合成(阻塞调用放 spawn_blocking)
                         let (Some(tts), Some(player)) = (&tts, &player) else { continue };
                         let tts = tts.clone();
-                        let tts_result = tokio::task::spawn_blocking(move || tts.synthesize(&reply)).await;
+                        let reply_for_tts = reply.clone();
+                        let tts_result = tokio::task::spawn_blocking(move || tts.synthesize(&reply_for_tts)).await;
                         let Ok(Some((samples, rate))) = tts_result else {
                             set_phase_error(&state, "语音合成失败".into());
                             continue;

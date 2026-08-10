@@ -44,8 +44,8 @@ impl Tts {
 
     /// 合成一段语音,返回 (PCM f32, 采样率)。阻塞调用。
     pub fn synthesize(&self, text: &str) -> Option<(Vec<f32>, u32)> {
-        let gen = GenerationConfig { sid: self.voice_id, speed: 1.0, ..Default::default() };
-        let audio = self.engine.generate_with_config(text, &gen, None::<fn(&[f32], f32) -> bool>)?;
+        let gen_cfg = GenerationConfig { sid: self.voice_id, speed: 1.0, ..Default::default() };
+        let audio = self.engine.generate_with_config(text, &gen_cfg, None::<fn(&[f32], f32) -> bool>)?;
         let rate = self.engine.sample_rate();
         Some((audio.samples().to_vec(), rate as u32))
     }

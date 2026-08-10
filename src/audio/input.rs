@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::state::{Phase, SharedState, UiState};
+use crate::state::{Phase, SharedState};
 
 /// 一帧麦克风音频(约 100ms)。
 #[derive(Debug, Clone)]
@@ -83,13 +82,6 @@ pub fn spawn_mic(tx: flume::Sender<AudioChunk>, state: SharedState) -> Result<()
 
     // stream 必须存活:放进线程里 park 到进程结束。
     thread::Builder::new()
-        .name("mic-keepalive".into())
-        .spawn(move || loop {
-            thread::park();
-        })
-        .context("启动麦克风线程失败")?;
-    // 把 stream 挪进线程,避免主线程 drop。
-    thread::Builder::new()
         .name("mic-holder".into())
         .spawn(move || {
             let _stream = stream;
@@ -126,15 +118,10 @@ fn push_chunk(tx: &flume::Sender<AudioChunk>, state: &SharedState, data: &[f32],
     }
     // 打包成 100ms 一帧(48k = 4800, 44.1k = 4410, 16k = 1600)
     const TARGET_MS: usize = 100;
-    const MAX_CHUNK: usize = 4800;
-    let target = (rate as usize * TARGET_MS / 1000).clamp(160, MAX_CHUNK);
+    let target = (rate as usize * TARGET_MS / 1000).clamp(160, 4800);
     for c in mono.chunks(target) {
         if c.len() >= 160 {
             let _ = tx.send(AudioChunk { samples: c.to_vec(), sample_rate: rate });
         }
     }
 }
-
-// 保持 UiState 引用,避免未使用告警
-#[allow(dead_code)]
-fn _touch(_s: &UiState) {}

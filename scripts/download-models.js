@@ -14,6 +14,14 @@ const JSDELIVR = 'https://cdn.jsdelivr.net';
 // everything under `exclude` is skipped.
 const JOBS = [
   {
+    name: 'sherpa-onnx Windows 预编译静态库 (v1.13.4)',
+    base: 'https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/469211798',
+    files: ['sherpa-onnx-v1.13.4-win-x64-static-MT-Release-lib.tar.bz2'],
+    dest: 'target/sherpa-onnx-prebuilt',
+    headers: ['-H', 'Accept: application/octet-stream'],
+    resume: true,
+  },
+  {
     name: 'ASR zipformer zh-14M (int8)',
     base: `${MIRROR}/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/resolve/main/`,
     files: [
@@ -62,7 +70,7 @@ let done = 0;
 const total = JOBS.reduce((n, j) => n + j.files.length, 0);
 const failed = [];
 
-function download(url, destPath, retries = 3) {
+function download(job, destPath, retries = 3) {
   return new Promise((resolve) => {
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
     if (fs.existsSync(destPath) && fs.statSync(destPath).size > 0) {
@@ -71,7 +79,9 @@ function download(url, destPath, retries = 3) {
       return resolve(true);
     }
     const tmp = destPath + '.part';
-    const cmd = `curl -sL --max-time 600 -o "${tmp}" "${url}"`;
+    const headers = (job.headers || []).join(' ');
+    const resume = job.resume ? '-C -' : '';
+    const cmd = `curl -sL ${resume} ${headers} --retry 5 --retry-delay 3 --max-time 900 -o "${tmp}" "${job.base}"`;
     try {
       execSync(cmd, { stdio: 'ignore' });
       if (fs.existsSync(tmp) && fs.statSync(tmp).size > 0) {
@@ -86,7 +96,7 @@ function download(url, destPath, retries = 3) {
       try { fs.unlinkSync(tmp); } catch {}
       if (retries > 0) {
         console.log(`[retry ${3 - retries + 1}] ${destPath}`);
-        download(url, destPath, retries - 1).then(resolve);
+        download(job, destPath, retries - 1).then(resolve);
       } else {
         failed.push(destPath);
         console.log(`[FAIL] ${destPath}: ${e.message.slice(0, 80)}`);
@@ -99,9 +109,9 @@ function download(url, destPath, retries = 3) {
 
 function pump(queue) {
   while (active < CONCURRENCY && queue.length > 0) {
-    const { url, destPath } = queue.shift();
+    const { job, destPath } = queue.shift();
     active++;
-    download(url, destPath).then(() => {
+    download(job, destPath).then(() => {
       active--;
       if (queue.length > 0) pump(queue);
       else if (active === 0) {
@@ -118,7 +128,7 @@ for (const job of JOBS) {
   console.log(`\n--- ${job.name}`);
   for (const f of job.files) {
     const destPath = path.join(job.dest, job.rename && job.rename[f] ? job.rename[f] : f);
-    queue.push({ url: job.base + f, destPath });
+    queue.push({ job, destPath });
   }
 }
 pump(queue);

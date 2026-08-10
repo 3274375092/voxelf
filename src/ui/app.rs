@@ -1,12 +1,11 @@
 use macroquad::prelude::*;
-use macroquad::text::{load_ttf_bytes_from_bytes, Font};
+use macroquad::text::{load_ttf_font_from_bytes, Font};
 use macroquad::window::Conf;
 
 use crate::config::Config;
 use crate::state::{Phase, SharedState, UiState};
 use crate::ui::sprite::{self, Palette};
 
-const FONT_PATH: &str = "assets/fonts/NotoSansSC.ttf";
 const CHAR_SCALE: f32 = 6.0;
 
 struct App {
@@ -94,7 +93,7 @@ impl App {
     }
 
     fn draw_bubble(&mut self, x: f32, y: f32, text: &str, accent: Color) {
-        let font = self.font;
+        let font = self.font.as_ref();
         let lines = wrap(text, 20);
         let font_size = 18;
         let line_h = 26.0;
@@ -126,7 +125,7 @@ impl App {
                     },
                 );
             } else {
-                draw_text(line, x + 14.0, y + 22.0 + i as f32 * line_h, font_size, Color::from_hex(0xe8eaf6));
+                draw_text(line, x + 14.0, y + 22.0 + i as f32 * line_h, font_size as f32, Color::from_hex(0xe8eaf6));
             }
         }
     }
@@ -139,7 +138,7 @@ impl App {
         let accent = phase_color(st.phase);
         draw_rectangle(20.0, y - 8.0, w, 28.0, accent);
         draw_rectangle(22.0, y - 6.0, w - 4.0, 24.0, Color::from_hex(0x141526));
-        if let Some(f) = self.font {
+        if let Some(f) = self.font.as_ref() {
             draw_text_ex(label, 30.0, y + 10.0, TextParams { font: Some(f), font_size: 16, color: accent, ..Default::default() });
         } else {
             draw_text(label, 30.0, y + 10.0, 16.0, accent);
@@ -152,12 +151,12 @@ impl App {
         // ASR 实时文本
         let partial = st.asr_partial.trim();
         if !partial.is_empty() {
-            if let Some(f) = self.font {
+            if let Some(f) = self.font.as_ref() {
                 draw_text_ex(partial, 130.0, y - 12.0, TextParams { font: Some(f), font_size: 14, color: Color::from_hex(0x8f94b8), ..Default::default() });
             }
         }
         if !st.status.is_empty() {
-            if let Some(f) = self.font {
+            if let Some(f) = self.font.as_ref() {
                 draw_text_ex(&st.status, 20.0, y + 36.0, TextParams { font: Some(f), font_size: 14, color: Color::from_hex(0xffb86b), ..Default::default() });
             }
         }
@@ -224,9 +223,22 @@ fn wrap(text: &str, max_chars: usize) -> Vec<String> {
     lines
 }
 
+/// 依次尝试候选字体。第一个能加载的就用。
+/// 注: Noto Sans SC 变量字体经实测 fontdue 不渲染 CJK 字形,回退到 SimHei。
+const FONT_CANDIDATES: [&str; 2] = ["assets/fonts/SimHei.ttf", "assets/fonts/NotoSansSC.ttf"];
+
 fn load_font() -> Option<Font> {
-    let bytes = std::fs::read(FONT_PATH).ok()?;
-    load_ttf_bytes_from_bytes(&bytes).ok()
+    for path in FONT_CANDIDATES {
+        let Ok(bytes) = std::fs::read(path) else { continue };
+        match load_ttf_font_from_bytes(&bytes) {
+            Ok(f) => {
+                tracing::info!("字体加载成功: {path}");
+                return Some(f);
+            }
+            Err(e) => tracing::warn!("字体加载失败: {path}: {e}"),
+        }
+    }
+    None
 }
 
 fn window_conf(cfg: &Config) -> Conf {
@@ -240,53 +252,64 @@ fn window_conf(cfg: &Config) -> Conf {
     }
 }
 
-/// 主界面:窗口循环,直到关闭。
-pub async fn run_ui(cfg: Config, state: SharedState) {
-    let mut window = Window::new(window_conf(&cfg)).await;
-    window.set_cursor_grab(false);
-    let font = load_font();
-    if font.is_none() {
-        tracing::warn!("字体缺失,界面中文将无法显示: 运行 node scripts/download-models.js");
-    }
-    let mut app = App::new(state, font);
-    loop {
-        window.next_frame().await;
-        if is_key_pressed(KeyCode::Escape) {
-            window.quit();
+/// 主界面:窗口循环,直到关闭。阻塞当前线程。
+pub fn run_ui(cfg: Config, state: SharedState) {
+    let conf = window_conf(&cfg);
+    macroquad::Window::from_config(conf, async move {
+        let font = load_font();
+        if font.is_none() {
+            tracing::warn!("字体缺失,界面中文将无法显示: 运行 node scripts/download-models.js");
         }
-        app.draw();
-        if window.is_quit_requested() {
-            break;
+        let mut app = App::new(state, font);
+        loop {
+            next_frame().await;
+            if is_key_pressed(KeyCode::Escape) {
+                miniquad::window::quit();
+            }
+            app.draw();
         }
-    }
+    });
 }
 
-/// 渲染一帧并保存 PNG(冒烟测试)。
-pub async fn run_smoke(cfg: Config, out: &str) {
-    let mut window = Window::new(window_conf(&cfg)).await;
-    window.next_frame().await;
+/// 渲染一帧并保存 PNG(冒烟测试)。阻塞当前线程。
+pub fn run_smoke(cfg: Config, out: &str) {
+    let out = out.to_string();
+    let conf = window_conf(&cfg);
+    macroquad::Window::from_config(conf, async move {
+        next_frame().await;
 
-    let state: SharedState = std::sync::Arc::new(std::sync::Mutex::new(UiState {
-        phase: Phase::Speaking,
-        asr_partial: "你好世界".into(),
-        last_user_text: String::new(),
-        reply_text: "你好,我是 Vox,你的像素伙伴!".into(),
-        mic_level: 0.3,
-        status: String::new(),
-        error: None,
-    }));
-    let mut app = App::new(state, load_font());
-    app.draw();
-    window.next_frame().await;
+        let state: SharedState = std::sync::Arc::new(std::sync::Mutex::new(UiState {
+            phase: Phase::Speaking,
+            asr_partial: "你好世界".into(),
+            last_user_text: String::new(),
+            reply_text: "你好,我是 Vox,你的像素伙伴!".into(),
+            mic_level: 0.3,
+            status: String::new(),
+            error: None,
+        }));
+        let mut app = App::new(state, load_font());
+        app.draw();
 
-    let img = get_screen_data();
-    let _ = image::save_buffer(
-        out,
-        &img.bytes,
-        img.width as u32,
-        img.height as u32,
-        image::ExtendedColorType::Rgba8,
-    );
-    tracing::info!("已保存截图 {out} ({}x{})", img.width, img.height);
-    window.quit();
+        // 必须在 next_frame 之前读(此时绘制批尚未被下一帧清空)
+        let mut img = get_screen_data();
+        // miniquad 读回是上下颠倒的,翻正后再保存
+        let row = (img.width as usize) * 4;
+        let mut flipped = vec![0u8; img.bytes.len()];
+        for y in 0..img.height as usize {
+            let src = &img.bytes[y * row..(y + 1) * row];
+            let dst = &mut flipped[(img.height as usize - 1 - y) * row..(img.height as usize - y) * row];
+            dst.copy_from_slice(src);
+        }
+        img.bytes = flipped;
+        let _ = image::save_buffer(
+            &out,
+            &img.bytes,
+            img.width as u32,
+            img.height as u32,
+            image::ExtendedColorType::Rgba8,
+        );
+        tracing::info!("已保存截图 {out} ({}x{})", img.width, img.height);
+        next_frame().await;
+        miniquad::window::quit();
+    });
 }
