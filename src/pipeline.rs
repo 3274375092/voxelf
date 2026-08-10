@@ -41,14 +41,15 @@ pub fn next_phase(ev: &crate::asr::AsrEvent, cur: Phase) -> Option<Phase> {
 /// 且距最近一次语音活动超过 timeout → 判定为误触发,应回 Idle。
 /// 背景: 麦克风回调按电平把 Idle 直接切到 Listening(开口即有反馈),
 /// 但噪音/误唤醒时 VAD 不会确认,也不会有任何 ASR 事件,旧代码会永远卡在聆听。
+/// `partial_empty` 语义: asr_partial 为空(无 VAD 确认的中间结果)时为 true。
 pub fn listening_false_trigger(
     phase: Phase,
-    has_partial: bool,
+    partial_empty: bool,
     mic_level: f32,
     quiet_for: Duration,
     timeout: Duration,
 ) -> bool {
-    phase == Phase::Listening && !has_partial && mic_level < 0.05 && quiet_for >= timeout
+    phase == Phase::Listening && partial_empty && mic_level < 0.05 && quiet_for >= timeout
 }
 
 /// 误触发回 Idle 的静默超时(秒): 必须长于 VAD 段收尾静音(vad_min_silence,
@@ -172,17 +173,9 @@ pub async fn brain_loop(
                 }
             }
             _ = tokio::time::sleep(Duration::from_millis(200)) => {
-                if let (Some(player), Ok(mut s)) = (&player, state.lock()) {
-                    // 播放完回到待机
-                    if s.phase == Phase::Speaking && player.is_idle() {
-                        s.phase = Phase::Idle;
-                        s.reply_text.clear();
-                    }
-                    // 待机且无声音时清掉残留的中间结果
-                    if s.phase == Phase::Idle && s.mic_level < 0.05 && !s.asr_partial.is_empty() {
-                        s.asr_partial.clear();
-                    }
-                    // 误触发(噪音/误唤醒,VAD 未确认)超时回 Idle,避免永远卡在聆听
+                if let Ok(mut s) = state.lock() {
+                    // 误触发(噪音/误唤醒,VAD 未确认)超时回 Idle,避免永远卡在聆听。
+                    // 不依赖播放器: 音频设备缺失时同样需要恢复(否则状态锁死)。
                     if listening_false_trigger(
                         s.phase,
                         s.asr_partial.is_empty(),
@@ -192,6 +185,18 @@ pub async fn brain_loop(
                     ) {
                         s.phase = Phase::Idle;
                         s.asr_partial.clear();
+                    }
+                    if let Some(player) = &player {
+                        // 播放完回到待机
+                        if s.phase == Phase::Speaking && player.is_idle() {
+                            s.phase = Phase::Idle;
+                            s.reply_text.clear();
+                        }
+                        // 待机且无声音时清掉残留的中间结果
+                        if s.phase == Phase::Idle && s.mic_level < 0.05 && !s.asr_partial.is_empty()
+                        {
+                            s.asr_partial.clear();
+                        }
                     }
                 }
             }
@@ -407,7 +412,7 @@ mod tests {
     use crate::state::{Phase, SharedState, UiState};
     use crate::tts;
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     /// 状态机测试: 事件 → 状态转换必须与动画匹配。
     #[test]
@@ -453,14 +458,59 @@ mod tests {
         use super::listening_false_trigger;
         let t = Duration::from_secs(2);
         // 噪音误触发: Listening + 无 partial + 安静 + 超时 → 判定为误触发
-        assert!(listening_false_trigger(Phase::Listening, false, 0.0, t, t));
+        assert!(listening_false_trigger(Phase::Listening, true, 0.0, t, t));
         // 未超时 / 麦克风还有声 / 有 ASR 中间结果(真实语音) → 不判定
-        assert!(!listening_false_trigger(Phase::Listening, false, 0.0, Duration::from_secs(1), t));
-        assert!(!listening_false_trigger(Phase::Listening, false, 0.2, t, t));
-        assert!(!listening_false_trigger(Phase::Listening, true, 0.0, t, t), "有 partial 说明 VAD 已确认");
+        assert!(!listening_false_trigger(Phase::Listening, true, 0.0, Duration::from_secs(1), t));
+        assert!(!listening_false_trigger(Phase::Listening, true, 0.2, t, t));
+        assert!(!listening_false_trigger(Phase::Listening, false, 0.0, t, t), "有 partial 说明 VAD 已确认");
         // 非 Listening 状态不受影响
-        assert!(!listening_false_trigger(Phase::Idle, false, 0.0, t, t));
-        assert!(!listening_false_trigger(Phase::Speaking, false, 0.0, t, t));
+        assert!(!listening_false_trigger(Phase::Idle, true, 0.0, t, t));
+        assert!(!listening_false_trigger(Phase::Speaking, true, 0.0, t, t));
+    }
+
+    /// 集成测试(真实 brain_loop 事件循环 + 真实 tick):
+    /// 开口(SpeechStarted)→ Listening;无任何 ASR 活动且静音 2s → 自动回 Idle;
+    /// Partial 到达刷新活动 → 保持 Listening(真实语音不被误杀)。
+    /// 注: 真实语音结束由 VAD 弹段 → Final → Thinking 处理(state_machine 测试覆盖),
+    /// 不是 tick 的职责,故此处不模拟"Partial 后无声"。
+    /// 误触发回 Idle 不依赖音频设备(tick 逻辑与播放器解耦)。
+    #[tokio::test]
+    async fn brain_loop_false_trigger_integration() {
+        let cfg = match Config::load() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("SKIP: config 加载失败: {e}");
+                return;
+            }
+        };
+        let state: SharedState = Arc::new(Mutex::new(UiState::default()));
+        let (tx, rx) = flume::unbounded::<crate::asr::AsrEvent>();
+        let task = tokio::spawn(super::brain_loop(cfg, rx, state.clone()));
+        let phase = || state.lock().unwrap().phase;
+
+        // 开口 → Listening
+        tx.send(crate::asr::AsrEvent::SpeechStarted).unwrap();
+        wait_until(|| phase() == Phase::Listening, Duration::from_secs(3)).await;
+        assert_eq!(phase(), Phase::Listening);
+        // 无 ASR 活动 + 静音 → 2s 后回 Idle(修复前永远卡聆听)
+        wait_until(|| phase() == Phase::Idle, Duration::from_secs(5)).await;
+        assert_eq!(phase(), Phase::Idle, "误触发应自动回 Idle");
+        // Partial 刷新活动 → 保持 Listening(真实语音不被误杀)
+        tx.send(crate::asr::AsrEvent::Partial("你好".into())).unwrap();
+        wait_until(|| phase() == Phase::Listening, Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        assert_eq!(phase(), Phase::Listening, "1s 内的语音活动应保持聆听");
+
+        // 收尾: 关闭通道让 brain_loop 退出
+        drop(tx);
+        let _ = tokio::time::timeout(Duration::from_secs(3), task).await;
+    }
+
+    async fn wait_until(mut f: impl FnMut() -> bool, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while !f() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// 完整对话循环: Idle → 开口 → Listening → Final → Thinking → 播放 Speaking → Idle

@@ -335,6 +335,36 @@ mod tests {
         assert!(s.visible, "托盘 toggle 应能恢复显示");
     }
 
+    /// 完整流程(真实 apply_action): 启动即可见 → 首次托盘点击应"隐藏",
+    /// 而不是因状态初始值错误变成 no-op(修复前首次点击无效)。
+    #[test]
+    fn first_tray_toggle_hides_from_startup_visible() {
+        let ctx = egui::Context::default();
+        let state = SharedTrayState::default();
+        state.lock().unwrap().visible = true; // 与 run_ui 初始值一致
+        apply_action(&ctx, &state, TrayAction::ToggleVisible);
+        let s = state.lock().unwrap();
+        assert!(!s.visible, "首次托盘点击应从可见→隐藏");
+        assert_eq!(s.feedback.as_ref().map(|(t, _)| t.as_str()), Some("已隐藏到托盘"));
+    }
+
+    /// 完整流程(真实 apply_action): Esc 隐藏(mark_hidden)后,
+    /// 托盘"显示/隐藏"一次点击必须恢复显示(修复前要等第二次点击才生效)。
+    #[test]
+    fn tray_toggle_recovers_after_esc_hide() {
+        let ctx = egui::Context::default();
+        let state = SharedTrayState::default();
+        state.lock().unwrap().visible = true;
+        // Esc 隐藏(非托盘路径)
+        mark_hidden(&mut state.lock().unwrap());
+        assert!(!state.lock().unwrap().visible);
+        // 托盘一次点击 → 恢复显示
+        apply_action(&ctx, &state, TrayAction::ToggleVisible);
+        let s = state.lock().unwrap();
+        assert!(s.visible, "一次托盘点击应恢复显示");
+        assert_eq!(s.feedback.as_ref().map(|(t, _)| t.as_str()), Some("已显示"));
+    }
+
     /// 开机自启注册表往返: 写入 → 读回 true → 删除 → 读回 false。
     /// 测试结束恢复原状,不影响用户设置。
     #[test]
