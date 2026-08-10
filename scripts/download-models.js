@@ -33,24 +33,10 @@ const JOBS = [
     ],
     dest: 'assets/models/asr-zh',
   },
-  {
-    name: 'ASR zipformer 中英双语 (zipformer2, 2025-02-10, 鹏程星灵)',
-    base: `${MIRROR}/csukuangfj/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/resolve/main/`,
-    files: [
-      'encoder-epoch-75-avg-11-chunk-16-left-128.int8.onnx',
-      'decoder-epoch-75-avg-11-chunk-16-left-128.onnx',
-      'joiner-epoch-75-avg-11-chunk-16-left-128.int8.onnx',
-      'tokens.txt',
-      'test_wavs/zh.wav',
-      'test_wavs/en.wav',
-    ],
-    dest: 'assets/models/asr-zh-en-2025',
-    rename: {
-      'encoder-epoch-75-avg-11-chunk-16-left-128.int8.onnx': 'encoder.int8.onnx',
-      'decoder-epoch-75-avg-11-chunk-16-left-128.onnx': 'decoder.onnx',
-      'joiner-epoch-75-avg-11-chunk-16-left-128.int8.onnx': 'joiner.int8.onnx',
-    },
-  },
+  // 中英双语 ASR(可选, 默认不下载): 英文词/短语识别更好但中文略有退化。
+  // 需要时手动下载 csukuangfj/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10
+  // (encoder-epoch-75-avg-11-chunk-16-left-128.int8.onnx → encoder.int8.onnx 等) 到
+  // assets/models/asr-zh-en-2025, 并把 config.toml 的 asr_dir 指向该目录。
   {
     name: 'VAD silero',
     base: `${MIRROR}/csukuangfj/vad/resolve/main/`,

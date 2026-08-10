@@ -25,9 +25,10 @@ tools = ""
 timeout_secs = 120
 
 [models]
-# 纯中文: assets/models/asr-zh(zipformer2, 默认)
-# 中英双语: assets/models/asr-zh-en-2025(zipformer2, 2025-02-10, 英文词/短语识别更好)
-asr_dir = "assets/models/asr-zh-en-2025"
+# 纯中文: assets/models/asr-zh(zipformer2, 默认, 中文准确率最高)
+# 中英双语(可选): assets/models/asr-zh-en-2025(zipformer2, 2025-02-10,
+#   英文词/短语识别更好,但中文略有退化; 需先跑下载脚本拉取)
+asr_dir = "assets/models/asr-zh"
 vad_model = "assets/models/vad/silero_vad.onnx"
 # ASR 模型架构: zipformer2(2024+ 中文/双语模型) | zipformer(2023 老双语模型)
 asr_model_type = "zipformer2"
