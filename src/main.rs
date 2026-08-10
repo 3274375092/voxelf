@@ -86,6 +86,7 @@ fn main() -> Result<()> {
                         BrainEvent::Delta(d) => print!("{d}"),
                         BrainEvent::Done(r) => println!("\n[回复] {r}"),
                         BrainEvent::Err(e) => eprintln!("\n[错误] {e}"),
+                        BrainEvent::Working(t) => println!("\n[工具] {t}"),
                     }
                 }
             });
@@ -376,6 +377,14 @@ async fn run_stream_pipeline(
                     while let Some(s) = take_sentence(&mut sentence_buf) {
                         pending += 1;
                         let _ = tts_req_tx.send(s);
+                    }
+                }
+                Ok(BrainEvent::Working(tool)) => {
+                    // agent 正在执行工具: 切"干活"动画,文本不进入 TTS 流
+                    tracing::info!("agent 工具: {tool}");
+                    if let Ok(mut s) = state.lock() {
+                        s.phase = Phase::Working;
+                        s.status = format!("正在{tool}...");
                     }
                 }
                 Ok(BrainEvent::Done(_)) => {

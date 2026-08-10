@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod deepseek;
+pub mod hybrid;
 
 use crate::config::Config;
 
@@ -11,19 +12,22 @@ pub enum BrainEvent {
     /// 完整回复(流结束)
     Done(String),
     Err(String),
+    /// agent 正在执行工具(携带工具名,驱动"干活"动画)
+    Working(String),
 }
 
-/// 大脑实现:DeepSeek API 或 agent 子进程。
-/// 后续加 pi / MCP 直连时在这里扩展。
+/// 大脑实现:DeepSeek API、agent 子进程(常驻 repl),或双层 hybrid(闲聊 DeepSeek + 操作 agent)。
 pub enum BrainKind {
     DeepSeek(deepseek::DeepSeekBrain),
     Agent(agent::AgentBrain),
+    Hybrid(hybrid::HybridBrain),
 }
 
 impl BrainKind {
     pub fn from_config(cfg: &Config) -> Self {
         match cfg.brain.kind.as_str() {
             "agent" => BrainKind::Agent(agent::AgentBrain::new(&cfg.brain.agent)),
+            "hybrid" => BrainKind::Hybrid(hybrid::HybridBrain::new(cfg)),
             _ => BrainKind::DeepSeek(deepseek::DeepSeekBrain::new(&cfg.deepseek)),
         }
     }
@@ -33,6 +37,7 @@ impl BrainKind {
         match self {
             BrainKind::DeepSeek(b) => b.run_streaming(text, tx).await,
             BrainKind::Agent(b) => b.run_streaming(text, tx).await,
+            BrainKind::Hybrid(b) => b.run_streaming(text, tx).await,
         }
     }
 

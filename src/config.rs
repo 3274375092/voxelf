@@ -32,6 +32,15 @@ pub struct BrainCfg {
 pub struct AgentCfg {
     pub command: String,
     pub workdir: PathBuf,
+    /// 是否启用 agent(false = 即使装了 jcode 也不用)
+    pub enabled: bool,
+    /// 传给 `jcode repl -p <provider>` 的 provider;留空用 jcode 自动探测
+    pub provider: String,
+    /// 工具白名单(逗号分隔,如 read,write,edit,bash);
+    /// 空则用 --tool-profile minimal(只读工具集)
+    pub tools: String,
+    /// 单轮 agent 响应超时(秒),超时后杀掉进程并报错
+    pub timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -77,7 +86,14 @@ impl Default for DeepSeekCfg {
 }
 impl Default for AgentCfg {
     fn default() -> Self {
-        Self { command: "jcode".into(), workdir: ".".into() }
+        Self {
+            command: "jcode".into(),
+            workdir: ".".into(),
+            enabled: true,
+            provider: "deepseek".into(),
+            tools: String::new(),
+            timeout_secs: 120,
+        }
     }
 }
 impl Default for BrainCfg {
