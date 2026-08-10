@@ -30,7 +30,7 @@ flowchart LR
 | 音频播放 | `rodio`(基于 cpal) | 裸 cpal | 有 Sink 队列,直接喂 TTS 的 PCM |
 | 语音识别 | `sherpa-onnx` 1.13.4 | `whisper-rs` 0.16 | 流式(边说边出字)+ 内置 silero-vad,中文用 Zipformer/Parakeet 模型,CPU 实时率 <0.5。whisper 非流式、延迟高,只适合离线批量 |
 | 大模型 | DeepSeek API(OpenAI 兼容),`reqwest` 手写 SSE | `async-openai`(改 base_url) | DeepSeek 无 ASR/TTS 服务,只负责对话 |
-| 语音合成 | sherpa-onnx 自带 TTS(Kokoro/VITS 中文音色) | 阿里云 CosyVoice(云端,中文顶级);edge-tts 已停更,不推荐 | 与 ASR 同库,全离线闭环,零额外成本 |
+| 语音合成 | **vits-zh-ll(定稿)**: 16kHz,14字 0.65s,首句 0.15s | kokoro(中英双语,~2.2s,音质好); supertonic-3(极快但无中文); matcha zh-en(双语+快,待接入) | 中文为主场景的最优平衡;`tts_kind` 可随时切换 |
 | 渲染 | `macroquad` | `bevy`(重)、`pixels`(裸 framebuffer,太底层) | 轻量跨平台,2D 像素风友好,API 简单,项目规模匹配 |
 | 异步 | `tokio` + `flume`/`tokio::mpsc` | — | 每阶段一个 task;sherpa-onnx 是同步 C 调用,放 `spawn_blocking` |
 | 配置 | `config` / `serde` + TOML | — | 存 API key、模型路径、语音参数 |
