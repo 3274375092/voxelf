@@ -3,6 +3,7 @@ mod asr;
 mod brain;
 mod config;
 mod state;
+mod tray;
 mod tts;
 mod ui;
 

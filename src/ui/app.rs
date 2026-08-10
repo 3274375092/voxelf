@@ -7,6 +7,7 @@ use std::sync::Arc;
 use eframe::egui;
 
 use crate::state::{Phase, SharedState, UiState};
+use crate::tray::{Tray, TrayAction};
 use crate::ui::kaomoji;
 
 /// 桌宠窗口尺寸(32x32 网格 x 10px)
@@ -16,6 +17,9 @@ const PET_H: f32 = 320.0;
 pub struct VoxApp {
     state: SharedState,
     t: f64,
+    tray: Option<Tray>,
+    locked: bool,
+    topmost: bool,
 }
 
 /// 字幕文本截断: 超过 max_chars 字符截断并加省略号(纯函数,可测试)。
@@ -30,8 +34,8 @@ fn subtitle_text(text: &str, max_chars: usize) -> String {
 }
 
 impl VoxApp {
-    pub fn new(state: SharedState) -> Self {
-        Self { state, t: 0.0 }
+    pub fn new(state: SharedState, tray: Option<Tray>) -> Self {
+        Self { state, t: 0.0, tray, locked: false, topmost: true }
     }
 
     fn phase_color(phase: Phase) -> egui::Color32 {
@@ -375,12 +379,14 @@ impl VoxApp {
             egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), (10.0 + 14.0 * breathe) as u8),
         );
 
-        // 拖动: 按住电视移动窗口
+        // 拖动: 按住电视区域移动窗口(锁定时不响应)
         let ctx = ui.ctx().clone();
-        let pointer = ui.input(|i| i.pointer.hover_pos());
-        let pressed = ui.input(|i| i.pointer.primary_pressed());
-        if pressed && pointer.is_some_and(|p| tv.contains(p)) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        if !self.locked {
+            let pointer = ui.input(|i| i.pointer.hover_pos());
+            let pressed = ui.input(|i| i.pointer.primary_pressed());
+            if pressed && pointer.is_some_and(|p| tv.contains(p)) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
         }
     }
 }
@@ -391,6 +397,50 @@ impl eframe::App for VoxApp {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
         let dt = ui.input(|i| i.stable_dt).min(0.1) as f64;
         self.t += dt;
+        let ctx = ui.ctx().clone();
+
+        // 托盘命令
+        if let Some(t) = self.tray.as_mut() {
+            match t.poll() {
+                Some(TrayAction::ToggleVisible) => {
+                    let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(!visible));
+                }
+                Some(TrayAction::ToggleLock) => {
+                    self.locked = !self.locked;
+                }
+                Some(TrayAction::ToggleTopmost) => {
+                    self.topmost = !self.topmost;
+                    let level = if self.topmost {
+                        egui::WindowLevel::AlwaysOnTop
+                    } else {
+                        egui::WindowLevel::Normal
+                    };
+                    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+                }
+                Some(TrayAction::ToggleAutostart) => {}
+                Some(TrayAction::Quit) => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                None => {}
+            }
+            // 同步菜单状态
+            t.sync(self.locked, self.topmost);
+        }
+
+        // 关闭窗口(Alt+F4/系统关闭)→ 隐藏到托盘而非退出
+        if ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            return;
+        }
+
+        // Esc → 隐藏到托盘
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            return;
+        }
+
         self.draw_pet(ui);
     }
 }
@@ -415,8 +465,12 @@ fn setup_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// 启动 eframe 桌宠窗口。阻塞当前线程。
+/// 启动 eframe 桌宠窗口(含系统托盘)。阻塞当前线程。
 pub fn run_ui(state: SharedState) -> eframe::Result<()> {
+    let tray = crate::tray::Tray::new();
+    if tray.is_none() {
+        tracing::warn!("托盘初始化失败,继续无托盘运行");
+    }
     let viewport = egui::ViewportBuilder::default()
         .with_title("voxelf - 语音像素伙伴")
         .with_inner_size([PET_W, PET_H])
@@ -434,7 +488,7 @@ pub fn run_ui(state: SharedState) -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             setup_fonts(&cc.egui_ctx);
-            Ok(Box::new(VoxApp::new(state)))
+            Ok(Box::new(VoxApp::new(state, tray)))
         }),
     )
 }
