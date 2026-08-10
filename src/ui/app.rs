@@ -20,9 +20,6 @@ pub struct VoxApp {
     tray: Option<Tray>,
     /// 托盘共享状态(forwarder 线程直接更新,UI 只读)
     tray_state: Option<SharedTrayState>,
-    /// 诊断: 帧计数与日志时间
-    frames: u64,
-    last_fps_log: f64,
 }
 
 /// 字幕文本截断: 超过 max_chars 字符截断并加省略号(纯函数,可测试)。
@@ -43,8 +40,6 @@ impl VoxApp {
             t: 0.0,
             tray,
             tray_state,
-            frames: 0,
-            last_fps_log: 0.0,
         }
     }
 
@@ -54,17 +49,6 @@ impl VoxApp {
             .as_ref()
             .map(|s| s.lock().expect("tray state 锁").clone())
             .unwrap_or_default()
-    }
-
-    /// 诊断: 每秒记录一次帧率(确认自维持重绘是否工作)
-    fn log_fps(&mut self) {
-        self.frames += 1;
-        if self.t - self.last_fps_log >= 1.0 {
-            let dt = (self.t - self.last_fps_log).max(0.001);
-            tracing::info!("DIAG 帧率: {:.0} fps", self.frames as f64 / dt);
-            self.frames = 0;
-            self.last_fps_log = self.t;
-        }
     }
 
     fn phase_color(phase: Phase) -> egui::Color32 {
@@ -439,7 +423,6 @@ impl eframe::App for VoxApp {
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
         let dt = ctx.input(|i| i.stable_dt).min(0.1) as f64;
         self.t += dt;
-        self.log_fps();
         // 同步托盘菜单勾选状态(主线程;tray-icon !Send 不能跨线程)
         if let Some(t) = &self.tray {
             let s = self.tray_snapshot();
@@ -520,11 +503,13 @@ pub fn run_ui(state: SharedState) -> eframe::Result<()> {
     )
 }
 
+#[allow(dead_code)] // 测试用纯函数
 /// 可见性切换决策(纯函数,可测试): 隐藏 → 显示,显示 → 隐藏
 fn toggle_visible(current: bool) -> bool {
     !current
 }
 
+#[allow(dead_code)] // 测试用纯函数
 /// 事件去抖: 同动作在 debounce 秒内重复到达则忽略。
 /// 复现: Windows 上一次菜单点击会产生 2 个 MenuEvent,导致动作双触发。
 fn should_accept_action(

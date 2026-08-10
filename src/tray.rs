@@ -133,16 +133,16 @@ pub struct TrayState {
 /// 事件要等鼠标移动触发帧才被处理; 这里改为直接执行,零延迟。
 pub fn spawn_event_forwarder(ctx: egui::Context, state: SharedTrayState) {
     std::thread::spawn(move || loop {
-        if let Ok(ev) = muda::MenuEvent::receiver().try_recv() {
-            if let Some(a) = action_for_id(ev.id.0.as_str()) {
-                tracing::info!("DIAG 转发菜单事件: {:?} (id={})", a, ev.id.0);
-                apply_action(&ctx, &state, a);
-            }
+        if let Ok(ev) = muda::MenuEvent::receiver().try_recv()
+            && let Some(a) = action_for_id(ev.id.0.as_str())
+        {
+            tracing::debug!("托盘: 菜单事件 {:?} (id={})", a, ev.id.0);
+            apply_action(&ctx, &state, a);
         }
         if let Ok(ev) = tray_icon::TrayIconEvent::receiver().try_recv()
             && matches!(ev, tray_icon::TrayIconEvent::DoubleClick { .. })
         {
-            tracing::info!("DIAG 转发双击事件");
+            tracing::debug!("托盘: 双击事件");
             apply_action(&ctx, &state, TrayAction::ToggleVisible);
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -155,11 +155,12 @@ fn apply_action(ctx: &egui::Context, state: &SharedTrayState, action: TrayAction
     let mut s = state.lock().expect("tray state 锁");
     let now = std::time::Instant::now();
     // 去抖: Windows 一次菜单点击会产生 2 个 MenuEvent
-    if let Some((a, at)) = s.last_action {
-        if a == action && now.duration_since(at).as_millis() < 150 {
-            tracing::debug!("托盘: 忽略重复事件 {:?}", action);
-            return;
-        }
+    if let Some((a, at)) = s.last_action
+        && a == action
+        && now.duration_since(at).as_millis() < 150
+    {
+        tracing::debug!("托盘: 忽略重复事件 {:?}", action);
+        return;
     }
     s.last_action = Some((action, now));
 
