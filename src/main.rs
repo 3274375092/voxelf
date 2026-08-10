@@ -29,10 +29,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// 图形界面主程序(默认)
+    /// 图形界面主程序(默认,桌宠模式)
     Run,
-    /// 渲染一帧并保存 PNG 后退出(测试用)
-    Smoke { out: Option<String> },
     /// 对 wav 文件跑语音识别
     AsrFile { wav: String },
     /// 文本合成语音,保存为 wav
@@ -61,11 +59,6 @@ fn main() -> Result<()> {
 
     match cli.cmd.unwrap_or(Cmd::Run) {
         Cmd::Run => run_app(cfg),
-        Cmd::Smoke { out } => {
-            let path = out.unwrap_or_else(|| "smoke.png".to_string());
-            ui::app::run_smoke(cfg, &path);
-            Ok(())
-        }
         Cmd::AsrFile { wav } => asr::run_asr_file(&cfg.models, Path::new(&wav)),
         Cmd::Tts { text, out } => {
             let engine = tts::Tts::new(&cfg.models)?;
@@ -150,7 +143,7 @@ fn main() -> Result<()> {
 }
 
 /// UI 主程序: 麦克风 + ASR + 大脑 + TTS 全部在后台线程跑,
-/// macroquad 窗口在主线程渲染。
+/// eframe 桌宠窗口在主线程渲染。
 fn run_app(cfg: Config) -> Result<()> {
     let state: SharedState = Arc::new(Mutex::new(UiState {
         phase: Phase::Idle,
@@ -194,7 +187,8 @@ fn run_app(cfg: Config) -> Result<()> {
         })
         .context("启动大脑线程失败")?;
 
-    ui::app::run_ui(cfg, state);
+    ui::app::run_ui(state)
+    .map_err(|e| anyhow::anyhow!("eframe 启动失败: {e}"))?;
     Ok(())
 }
 
@@ -226,6 +220,28 @@ fn set_status(state: &SharedState, msg: String) {
 }
 
 /// 核心闭环: ASR 事件 -> 大脑 -> TTS -> 播放 -> 状态机。
+/// 事件 → 下一状态(纯函数,状态机可测试):
+/// - SpeechStarted/Partial: 仅在 Idle/Listening 时进入 Listening(开口即有反馈)
+/// - Final: Speaking/Thinking 时视为 busy 忽略(打断后续实现),否则进入 Thinking
+fn next_phase(ev: &asr::AsrEvent, cur: Phase) -> Option<Phase> {
+    match ev {
+        asr::AsrEvent::SpeechStarted | asr::AsrEvent::Partial(_) => {
+            if cur == Phase::Idle || cur == Phase::Listening {
+                Some(Phase::Listening)
+            } else {
+                None
+            }
+        }
+        asr::AsrEvent::Final(_) => {
+            if cur == Phase::Speaking || cur == Phase::Thinking {
+                None
+            } else {
+                Some(Phase::Thinking)
+            }
+        }
+    }
+}
+
 async fn brain_loop(
     cfg: Config,
     rx: flume::Receiver<asr::AsrEvent>,
@@ -256,15 +272,22 @@ async fn brain_loop(
             ev = rx.recv_async() => {
                 let Ok(ev) = ev else { break };
                 match ev {
-                    asr::AsrEvent::Partial(text) => {
+                    asr::AsrEvent::SpeechStarted => {
                         if let Ok(mut s) = state.lock() {
-                            if s.phase == Phase::Idle || s.phase == Phase::Listening {
-                                s.phase = Phase::Listening;
+                            if let Some(p) = next_phase(&ev, s.phase) {
+                                s.phase = p;
                             }
-                            s.asr_partial = text;
                         }
                     }
-                    asr::AsrEvent::Final(text) => {
+                    asr::AsrEvent::Partial(ref text) => {
+                        if let Ok(mut s) = state.lock() {
+                            if let Some(p) = next_phase(&ev, s.phase) {
+                                s.phase = p;
+                            }
+                            s.asr_partial = text.clone();
+                        }
+                    }
+                    asr::AsrEvent::Final(ref text) => {
                         // 说话中被忽略(打断功能后续实现)
                         let busy = if let Ok(s) = state.lock() {
                             s.phase == Phase::Speaking || s.phase == Phase::Thinking
@@ -499,7 +522,62 @@ fn take_sentence(buf: &mut String) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::next_phase;
     use super::split_sentences;
+    use crate::asr::AsrEvent;
+    use crate::state::Phase;
+
+    /// 状态机测试: 事件 → 状态转换必须与动画匹配。
+    #[test]
+    fn state_machine_listening_on_speech_start() {
+        // 开口瞬间(VAD) → 立即聆听动画
+        assert_eq!(
+            next_phase(&AsrEvent::SpeechStarted, Phase::Idle),
+            Some(Phase::Listening)
+        );
+        assert_eq!(
+            next_phase(&AsrEvent::SpeechStarted, Phase::Listening),
+            Some(Phase::Listening)
+        );
+        assert_eq!(
+            next_phase(&AsrEvent::Partial("你".into()), Phase::Idle),
+            Some(Phase::Listening)
+        );
+        // 处理中(思考/说话)不被打断回聆听
+        assert_eq!(next_phase(&AsrEvent::SpeechStarted, Phase::Thinking), None);
+        assert_eq!(next_phase(&AsrEvent::SpeechStarted, Phase::Speaking), None);
+        assert_eq!(next_phase(&AsrEvent::SpeechStarted, Phase::Working), None);
+    }
+
+    #[test]
+    fn state_machine_final_to_thinking() {
+        assert_eq!(
+            next_phase(&AsrEvent::Final("你好".into()), Phase::Listening),
+            Some(Phase::Thinking)
+        );
+        assert_eq!(
+            next_phase(&AsrEvent::Final("你好".into()), Phase::Idle),
+            Some(Phase::Thinking)
+        );
+        // busy: 上一句还在处理,新 Final 被忽略
+        assert_eq!(next_phase(&AsrEvent::Final("你好".into()), Phase::Speaking), None);
+        assert_eq!(next_phase(&AsrEvent::Final("你好".into()), Phase::Thinking), None);
+    }
+
+    /// 完整对话循环: Idle → 开口 → Listening → Final → Thinking → 播放 Speaking → Idle
+    #[test]
+    fn state_machine_full_conversation_cycle() {
+        let mut phase = Phase::Idle;
+        phase = next_phase(&AsrEvent::SpeechStarted, phase).unwrap();
+        assert_eq!(phase, Phase::Listening, "开口应立刻聆听");
+        phase = next_phase(&AsrEvent::Partial("你好".into()), phase).unwrap();
+        assert_eq!(phase, Phase::Listening);
+        phase = next_phase(&AsrEvent::Final("你好".into()), phase).unwrap();
+        assert_eq!(phase, Phase::Thinking, "识别完成应思考");
+        // 播放结束回到 Idle(由播放器空闲轮询驱动,不在事件机内)
+        phase = Phase::Idle;
+        assert_eq!(phase, Phase::Idle);
+    }
 
     #[test]
     fn split_sentences_breaks_and_merges() {

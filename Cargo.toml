@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "voxelf"
 version = "0.1.0"
 edition = "2024"
@@ -7,10 +7,9 @@ edition = "2024"
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 cpal = "0.16.0"
+eframe = { version = "0.36.1", default-features = false, features = ["glow", "default_fonts", "accesskit", "x11", "wayland"] }
 flume = "0.12.0"
 futures-util = "0.3.33"
-image = "0.25.10"
-macroquad = "0.4.16"
 reqwest = { version = "0.13.4", features = ["json", "stream"] }
 rodio = "0.21.1"
 serde = { version = "1.0.229", features = ["derive"] }

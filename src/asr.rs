@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+﻿use anyhow::{Context, Result};
 use sherpa_onnx::{
     OnlineModelConfig, OnlineRecognizer, OnlineRecognizerConfig, OnlineStream,
     OnlineTransducerModelConfig, SileroVadModelConfig, VadModelConfig, VoiceActivityDetector,
@@ -12,6 +12,8 @@ use crate::config::{Config, ModelCfg};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AsrEvent {
+    /// VAD 检测到语音开始(开口瞬间,驱动聆听动画)
+    SpeechStarted,
     /// 实时识别中间结果
     Partial(String),
     /// 一句话识别完成
@@ -50,6 +52,8 @@ pub struct Asr {
     /// 最近 N 秒输入音频缓冲,用于段弹出后补偿 VAD 截掉的渐弱尾音
     tail_buf: std::collections::VecDeque<f32>,
     tail_pad: f32,
+    /// VAD 上一帧的语音检测状态(检测上升沿发 SpeechStarted)
+    last_detected: bool,
 }
 
 impl Asr {
@@ -85,7 +89,14 @@ impl Asr {
             vad.threshold,
             vad.min_silence
         );
-        Ok(Self { recognizer, vad: detector, sample_rate: 16000, tail_buf: Default::default(), tail_pad: vad.tail_pad })
+        Ok(Self {
+            recognizer,
+            vad: detector,
+            sample_rate: 16000,
+            tail_buf: Default::default(),
+            tail_pad: vad.tail_pad,
+            last_detected: false,
+        })
     }
 
     /// 喂入一段音频,返回产生的事件。samples 会被内部重采样到 16k(若设备采样率不同)。
@@ -106,6 +117,13 @@ impl Asr {
         };
 
         self.vad.accept_waveform(&samples);
+
+        // VAD 语音检测上升沿 → SpeechStarted(开口瞬间就通知 UI,不等 ASR 出字)
+        let detected = self.vad.detected();
+        if detected && !self.last_detected {
+            events.push(AsrEvent::SpeechStarted);
+        }
+        self.last_detected = detected;
 
         // 维护尾部缓冲(供 VAD 段尾音补偿)
         self.tail_buf.extend(samples.iter().copied());
@@ -484,4 +502,72 @@ pub fn run_asr_file(cfg: &ModelCfg, path: &Path) -> Result<()> {
         println!("(未识别到语音)");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 复现测试: 开口瞬间必须有 SpeechStarted 事件,且先于 Partial。
+    /// 若缺失,说明 UI 动画在开口到 ASR 出字之间没有反馈(状态不同步)。
+    #[test]
+    fn speech_started_fires_before_partial() {
+        let cfg = crate::config::ModelCfg::default();
+        let mut asr = match Asr::new(&cfg) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("SKIP: ASR 初始化失败(模型缺失?): {e}");
+                return;
+            }
+        };
+        let wave = match Wave::read("assets/models/asr-zh/test.wav") {
+            Some(w) => w,
+            None => {
+                eprintln!("SKIP: test.wav 缺失");
+                return;
+            }
+        };
+        let sr = wave.sample_rate() as i32;
+        let mut events: Vec<AsrEvent> = Vec::new();
+        for w in wave.samples().chunks(1600) {
+            let chunk = AudioChunk { samples: w.to_vec(), sample_rate: sr };
+            events.extend(asr.feed(&chunk));
+        }
+        eprintln!("事件序列({}): {:?}", events.len(), events);
+        let started = events.iter().position(|e| matches!(e, AsrEvent::SpeechStarted));
+        let partial = events.iter().position(|e| matches!(e, AsrEvent::Partial(_)));
+        assert!(started.is_some(), "语音段应产生 SpeechStarted: {events:?}");
+        assert!(partial.is_some(), "语音段应产生 Partial: {events:?}");
+        assert!(
+            started.unwrap() < partial.unwrap(),
+            "SpeechStarted 应先于 Partial(开口即聆听): {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, AsrEvent::Final(_))),
+            "应产生 Final: {events:?}"
+        );
+    }
+
+    /// 复现测试: 纯静音不应触发 SpeechStarted(避免误聆听)。
+    #[test]
+    fn silence_does_not_fire_speech_started() {
+        let cfg = crate::config::ModelCfg::default();
+        let mut asr = match Asr::new(&cfg) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("SKIP: ASR 初始化失败: {e}");
+                return;
+            }
+        };
+        let silence = vec![0.0f32; 16000 * 2]; // 2 秒静音
+        let mut events = Vec::new();
+        for w in silence.chunks(1600) {
+            let chunk = AudioChunk { samples: w.to_vec(), sample_rate: 16000 };
+            events.extend(asr.feed(&chunk));
+        }
+        assert!(
+            !events.iter().any(|e| matches!(e, AsrEvent::SpeechStarted)),
+            "静音不应触发 SpeechStarted: {events:?}"
+        );
+    }
 }
