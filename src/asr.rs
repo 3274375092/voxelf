@@ -325,6 +325,26 @@ pub fn run_asr_file(cfg: &ModelCfg, path: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// 重采样长度与值保真: 48k→16k 长度 1/3,信号形状不变(纯函数,无模型)。
+    #[test]
+    fn resample_linear_length_and_shape() {
+        // 1kHz 正弦 @48k,1 秒
+        let input: Vec<f32> = (0..48000)
+            .map(|i| (i as f32 * 2.0 * std::f32::consts::PI * 1000.0 / 48000.0).sin())
+            .collect();
+        let out = resample_linear(&input, 48000, 16000);
+        assert_eq!(out.len(), 16000, "48k→16k 长度应为 1/3");
+        // 同采样率直通
+        assert_eq!(resample_linear(&input, 48000, 48000).len(), 48000);
+        // 空输入
+        assert!(resample_linear(&[], 48000, 16000).is_empty());
+        // 形状校验: 48k→16k 整除,采样点严格对齐,16k 输出应逐点接近 sin(2π·i/16)
+        for (i, &v) in out.iter().enumerate().take(1000).skip(1) {
+            let expect = (2.0 * std::f32::consts::PI * i as f32 / 16.0).sin();
+            assert!((v - expect).abs() < 1e-3, "i={i}: {v} vs {expect}");
+        }
+    }
+
     /// 复现测试: 开口瞬间必须有 SpeechStarted 事件,且先于 Partial。
     /// 若缺失,说明 UI 动画在开口到 ASR 出字之间没有反馈(状态不同步)。
     #[test]

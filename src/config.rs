@@ -126,3 +126,42 @@ impl Config {
         Ok(cfg)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// config.example.toml 必须能被当前结构解析,防止示例与代码漂移
+    /// (示例里写了的字段解析不出来 = 用户照抄就报错)。
+    #[test]
+    fn example_config_parses() {
+        let text = std::fs::read_to_string("config.example.toml")
+            .expect("config.example.toml 应存在");
+        let cfg: Config = toml::from_str(&text).expect("示例配置应能被解析");
+        assert_eq!(cfg.brain.kind, "deepseek");
+        assert_eq!(cfg.models.tts_kind, "vits");
+        assert_eq!(cfg.models.vad_min_silence, 0.5);
+        assert_eq!(cfg.brain.agent.command, "jcode");
+    }
+
+    /// 未知字段(如旧版本遗留的 [ui] 段)应被忽略,不能导致启动失败。
+    #[test]
+    fn unknown_fields_are_ignored() {
+        let text = r#"
+            [ui]
+            window_width = 960
+            window_height = 600
+        "#;
+        let cfg: Config = toml::from_str(text).expect("未知字段应被忽略");
+        assert_eq!(cfg.brain.kind, "deepseek");
+    }
+
+    /// 默认值兜底: 缺失字段全部走 Default(与示例一致的 VAD 默认)。
+    #[test]
+    fn defaults_fill_missing_fields() {
+        let cfg = Config::default();
+        assert_eq!(cfg.models.asr_dir, PathBuf::from("assets/models/asr-zh"));
+        assert_eq!(cfg.brain.agent.timeout_secs, 120);
+        assert!(cfg.deepseek.base_url.contains("deepseek"));
+    }
+}
