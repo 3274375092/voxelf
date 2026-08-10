@@ -296,34 +296,35 @@ impl VoxApp {
             );
         }
 
-        // ---- 字幕(屏幕内底部,自动换行 + 裁剪 + 自适应高度) ----
+        // ---- 字幕(屏幕内底部,贴底向上生长,层级最高) ----
         let text = self.status_text(&st);
         let wrap_w = g(24.0);
-        // 截断到最多 3 行(~21 字/行),超出加省略号
-        let max_chars = 63;
+        // 截断到最多 3 行(~23 字/行),超出加省略号
+        let max_chars = 69;
         let display = subtitle_text(&text, max_chars);
         let sub_color = egui::Color32::from_rgb(0xcf, 0xd4, 0xf0);
         let sub = painter.layout(
             display,
-            egui::FontId::proportional(13.0),
+            egui::FontId::proportional(12.0),
             sub_color,
             wrap_w,
         );
-        // 字幕条高度自适应(1~3 行)
-        let bar_h = (sub.size().y + 10.0).clamp(16.0, g(4.0));
+        // 字幕条贴屏幕底部,向上生长;高度上限 6 格(容纳 3 行)
+        let bar_bottom = screen_in.max.y - 4.0;
+        let bar_h = (sub.size().y + 12.0).min(g(6.0));
         let bar = egui::Rect::from_min_max(
-            egui::pos2(g(3.0), g(19.8)),
-            egui::pos2(g(29.0), g(19.8) + bar_h),
+            egui::pos2(g(3.0), bar_bottom - bar_h),
+            egui::pos2(g(29.0), bar_bottom),
         );
         painter.rect_filled(
             bar,
             egui::CornerRadius::same(3),
-            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 90),
+            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 130),
         );
         // 裁剪到条内,超长也不溢出界面
         let clipped = painter.with_clip_rect(bar);
         clipped.galley(
-            egui::pos2(bar.center().x - sub.size().x / 2.0, bar.min.y + 5.0),
+            egui::pos2(bar.center().x - sub.size().x / 2.0, bar.min.y + 6.0),
             sub,
             sub_color,
         );
