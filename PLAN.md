@@ -8,7 +8,7 @@
 flowchart LR
     MIC[麦克风 cpal] -->|PCM 流| VAD[VAD 静音检测]
     VAD -->|语音段| ASR[sherpa-onnx 流式 ASR]
-    ASR -->|文本| BRAIN{Brain trait}
+    ASR -->|文本| BRAIN{BrainKind}
     BRAIN -->|聊天| DS[DeepSeek API SSE]
     BRAIN -->|指令| AG[agent: jcode/pi 子进程]
     DS -->|回复文本| TTS[TTS 合成]
@@ -117,9 +117,9 @@ enum BrainEvent { Delta(String), Done(String), Err(String), Working(String) }
 
 | 里程碑 | 内容 | 预计 |
 |---|---|---|
-| M0 | cargo 工程 + macroquad 窗口 + 像素小人待机动画 | 0.5–1 天 |
-| M1 | cpal 采集 → sherpa-onnx 流式 ASR → 终端打印识别文本 | 1–2 天 |
-| M2 | + DeepSeek API + TTS + 播放,终端闭环跑通 | 1 天 |
+| M0 | cargo 工程 + eframe 窗口 + 像素电视待机动画 | ✅ 完成 |
+| M1 | cpal 采集 → sherpa-onnx 流式 ASR → 终端打印识别文本 | ✅ 完成 |
+| M2 | + DeepSeek API + TTS + 播放,终端闭环跑通 | ✅ 完成 |
 | M3 | 状态机 + 各阶段动画 + 波形可视化 | ✅ 完成(颜文字方案) |
 | M4 | Brain 拆分 + jcode repl 常驻适配(Working 动画,双层大脑) | ✅ 完成 |
 | M5 | 语音打断(barge-in)、上下文记忆、情绪系统、打包分发 | 2–3 天 |
