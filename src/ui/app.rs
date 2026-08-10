@@ -6,7 +6,9 @@ use crate::config::Config;
 use crate::state::{Phase, SharedState, UiState};
 use crate::ui::sprite::{self, Palette};
 
-const CHAR_SCALE: f32 = 6.0;
+const CHAR_SCALE: f32 = 4.0;
+/// 角色像素边长(与 sprite::SIZE 一致,避免魔法数)
+const SPRITE_PX: f32 = sprite::SIZE as f32;
 
 struct App {
     state: SharedState,
@@ -57,13 +59,20 @@ impl App {
         };
         let cx = screen_width() * 0.36;
         let cy = screen_height() * 0.72 + bob;
-        let sprite = sprite::build_frame(st.phase, self.t, st.mic_level);
-        sprite::draw(&sprite, cx - 16.0 * CHAR_SCALE / 2.0, cy - 32.0 * CHAR_SCALE, CHAR_SCALE, &self.palette);
+        let sprite = sprite::build_frame(st.phase, self.t, st.mic_level, &self.palette);
+        sprite::draw(
+            &sprite,
+            cx - SPRITE_PX * CHAR_SCALE / 2.0,
+            cy - SPRITE_PX * CHAR_SCALE,
+            CHAR_SCALE,
+            &self.palette,
+        );
 
         // 头顶状态装饰
+        let head_top = cy - SPRITE_PX * CHAR_SCALE;
         match st.phase {
-            Phase::Thinking => self.draw_think_bubble(cx, cy - 34.0 * CHAR_SCALE),
-            Phase::Speaking => self.draw_notes(cx, cy - 34.0 * CHAR_SCALE),
+            Phase::Thinking => self.draw_think_bubble(cx, head_top - 24.0),
+            Phase::Speaking => self.draw_notes(cx, head_top - 24.0),
             Phase::Working => self.draw_keyboard(cx, cy),
             _ => {}
         }
@@ -179,9 +188,9 @@ impl App {
     }
 
     fn draw_keyboard(&self, cx: f32, cy: f32) {
-        // 工作模式:小人面前放一个小键盘
+        // 工作模式:小人面前放一个小键盘(脚底下方)
         let kx = cx - 46.0;
-        let ky = cy + 32.0 * CHAR_SCALE * 0.55;
+        let ky = cy + SPRITE_PX * CHAR_SCALE * 0.4;
         draw_rectangle(kx, ky, 92.0, 30.0, Color::from_hex(0x3a4a6b));
         for r in 0..2 {
             for c in 0..5 {
@@ -299,17 +308,17 @@ pub fn run_smoke(cfg: Config, out: &str) {
             Phase::Working,
             Phase::Error,
         ];
-        let preview_scale = 3.0;
-        let preview_y = screen_height() - 160.0;
+        let preview_scale = 2.0;
+        let preview_y = screen_height() - 150.0;
         for (i, &ph) in states.iter().enumerate() {
             let cx = 90.0 + i as f32 * 135.0;
-            let sp = sprite::build_frame(ph, 0.35, 0.0);
-            sprite::draw(&sp, cx - 16.0 * preview_scale, preview_y, preview_scale, &app.palette);
+            let sp = sprite::build_frame(ph, 0.35, 0.0, &app.palette);
+            sprite::draw(&sp, cx - SPRITE_PX * preview_scale / 2.0, preview_y, preview_scale, &app.palette);
             if let Some(f) = app.font.as_ref() {
                 draw_text_ex(
                     ph.label(),
                     cx - 14.0,
-                    preview_y + 108.0,
+                    preview_y + SPRITE_PX * preview_scale + 14.0,
                     TextParams { font: Some(f), font_size: 14, color: phase_color(ph), ..Default::default() },
                 );
             }

@@ -9,18 +9,19 @@ if (!inFile || !outFile) { console.error('用法: node sprite-render.js in.js ou
 const mod = require('./' + inFile.replace(/\.js$/, ''));
 const rows = mod.rows;
 const palette = mod.palette;
+const N = rows.length;
 const scale = 10;
 
-if (rows.length !== 32 || rows.some(r => r.length !== 32)) {
-  console.error('rows 必须为 32 行 x 32 字符');
+if (!rows.every(r => r.length === N)) {
+  console.error('rows 必须为正方形,每行长度等于行数');
   process.exit(1);
 }
 
 // 构建 RGBA
-const W = 32 * scale, H = 32 * scale;
+const W = N * scale, H = N * scale;
 const px = Buffer.alloc(W * H * 4);
-for (let y = 0; y < 32; y++) {
-  for (let x = 0; x < 32; x++) {
+for (let y = 0; y < N; y++) {
+  for (let x = 0; x < N; x++) {
     const c = rows[y][x];
     const col = palette[c];
     for (let dy = 0; dy < scale; dy++) {
