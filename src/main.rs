@@ -1,4 +1,4 @@
-mod audio;
+﻿mod audio;
 mod asr;
 mod brain;
 mod config;
@@ -99,7 +99,7 @@ fn main() -> Result<()> {
         }
         Cmd::Speak { text } => {
             let text = text.unwrap_or_else(|| {
-                "你好呀!我是你的像素伙伴小奶蛙。今天天气不错,我们去公园散步吧?好的,那就出发啦!".to_string()
+                "你好呀!我是你的像素伙伴小可爱。今天天气不错,我们去公园散步吧?好的,那就出发啦!".to_string()
             });
             let engine = tts::Tts::new(&cfg.models)?;
             let player = audio::output::Player::new()?;
@@ -555,7 +555,7 @@ mod tests {
 
         let (ev_tx, ev_rx) = flume::unbounded::<BrainEvent>();
         // 模拟 LLM 流式: 逐字推送 Delta,最后 Done
-        let text = "你好呀!我是你的像素伙伴小奶蛙。今天天气不错呢?";
+        let text = "你好呀!我是你的像素伙伴小可爱。今天天气不错呢?";
         let text2 = text.to_string();
         tokio::spawn(async move {
             for c in text2.chars() {
