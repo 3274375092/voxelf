@@ -2,7 +2,6 @@
 mod asr;
 mod brain;
 mod config;
-mod skin;
 mod state;
 mod tts;
 mod ui;
@@ -48,21 +47,6 @@ enum Cmd {
     Speak { text: Option<String> },
     /// TTS 基准: 预热 + 稳态合成耗时(对比 kokoro/vits)
     TtsBench,
-    /// 参考图转像素皮肤: 居中裁剪 + 下采样 64x64 + 调色板量化(方案 B)
-    SkinFrom {
-        /// 参考图(任意尺寸/格式)
-        input: String,
-        /// 输出 PNG(默认 assets/sprites/vox.png)
-        out: Option<String>,
-        /// 边缘描边增强(像素画轮廓感)
-        #[arg(long)]
-        outline: bool,
-        /// 只取图顶部比例(0.1~1.0,立绘头部通常在上方;默认 1.0 = 全图居中)
-        #[arg(long, default_value_t = 1.0)]
-        top: f32,
-    },
-    /// 皮肤 ASCII 预览(语义色分类,辅助定位动画锚点)
-    SkinAscii { input: String },
 }
 
 fn main() -> Result<()> {
@@ -160,14 +144,6 @@ fn main() -> Result<()> {
                     );
                 }
             }
-            Ok(())
-        }
-        Cmd::SkinFrom { input, out, outline, top } => {
-            let out = out.unwrap_or_else(|| "assets/sprites/vox.png".into());
-            skin::convert(&input, &out, outline, top)
-        }
-        Cmd::SkinAscii { input } => {
-            skin::ascii_preview(&input)?;
             Ok(())
         }
     }

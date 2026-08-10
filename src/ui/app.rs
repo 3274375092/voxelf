@@ -1,21 +1,19 @@
-use macroquad::prelude::*;
+﻿use macroquad::prelude::*;
 use macroquad::text::{load_ttf_font_from_bytes, Font};
 use macroquad::window::Conf;
 
 use crate::config::Config;
 use crate::state::{Phase, SharedState, UiState};
-use crate::ui::sprite::{self, Palette};
+use crate::ui::kaomoji;
 
-const CHAR_SCALE: f32 = 4.0;
-/// 角色像素边长(与 sprite::SIZE 一致,避免魔法数)
-const SPRITE_PX: f32 = sprite::SIZE as f32;
+/// 颜文字字号(角色显示)
+const KAOMOJI_SIZE: f32 = 72.0;
 
 struct App {
     state: SharedState,
     font: Option<Font>,
     t: f32,
     stars: Vec<(f32, f32, f32)>,
-    palette: Palette,
 }
 
 impl App {
@@ -27,7 +25,7 @@ impl App {
                 (x, y, 1.0 + (i % 3) as f32)
             })
             .collect();
-        Self { state, font, t: 0.0, stars, palette: Palette::default() }
+        Self { state, font, t: 0.0, stars }
     }
 
     fn draw(&mut self) {
@@ -48,7 +46,7 @@ impl App {
         // 地面
         draw_rectangle(0.0, screen_height() * 0.86, screen_width(), 4.0, Color::from_hex(0x2b2f55));
 
-        // 小人(带轻微上下浮动)
+        // 颜文字角色(带上下浮动)
         let bob = match st.phase {
             Phase::Idle => (self.t * 2.0).sin() * 3.0,
             Phase::Listening => (self.t * 2.4).sin() * 4.0,
@@ -58,27 +56,34 @@ impl App {
             Phase::Error => 0.0,
         };
         let cx = screen_width() * 0.36;
-        let cy = screen_height() * 0.72 + bob;
-        let sprite = sprite::build_frame(st.phase, self.t, st.mic_level, &self.palette);
-        sprite::draw(
-            &sprite,
-            cx - SPRITE_PX * CHAR_SCALE / 2.0,
-            cy - SPRITE_PX * CHAR_SCALE,
-            CHAR_SCALE,
-            &self.palette,
-        );
-
-        // 头顶状态装饰
-        let head_top = cy - SPRITE_PX * CHAR_SCALE;
-        match st.phase {
-            Phase::Thinking => self.draw_think_bubble(cx, head_top - 24.0),
-            Phase::Speaking => self.draw_notes(cx, head_top - 24.0),
-            Phase::Working => self.draw_keyboard(cx, cy),
-            _ => {}
+        let cy = screen_height() * 0.40 + bob;
+        let face = kaomoji::kaomoji(st.phase, self.t);
+        let accent = phase_color(st.phase);
+        if let Some(f) = self.font.as_ref() {
+            let m = measure_text(face, Some(f), KAOMOJI_SIZE as u16, 1.0);
+            draw_text_ex(
+                face,
+                cx - m.width / 2.0,
+                cy + m.height / 2.0,
+                TextParams {
+                    font: Some(f),
+                    font_size: KAOMOJI_SIZE as u16,
+                    color: accent,
+                    ..Default::default()
+                },
+            );
+        } else {
+            draw_text(face, cx - 120.0, cy, KAOMOJI_SIZE, accent);
         }
 
-        // 对话框
-        let accent = phase_color(st.phase);
+        // 角色上方的状态装饰
+        let deco_y = cy - 60.0;
+        match st.phase {
+            Phase::Thinking => self.draw_think_bubble(cx, deco_y),
+            Phase::Speaking => self.draw_notes(cx, deco_y),
+            Phase::Working => self.draw_keyboard(cx, cy + 60.0),
+            _ => {}
+        }
         let bubble_x = screen_width() * 0.58;
         let bubble_y = 70.0;
         let text = if st.reply_text.is_empty() {
@@ -190,7 +195,7 @@ impl App {
     fn draw_keyboard(&self, cx: f32, cy: f32) {
         // 工作模式:小人面前放一个小键盘(脚底下方)
         let kx = cx - 46.0;
-        let ky = cy + SPRITE_PX * CHAR_SCALE * 0.4;
+        let ky = cy + 24.0;
         draw_rectangle(kx, ky, 92.0, 30.0, Color::from_hex(0x3a4a6b));
         for r in 0..2 {
             for c in 0..5 {
@@ -308,17 +313,23 @@ pub fn run_smoke(cfg: Config, out: &str) {
             Phase::Working,
             Phase::Error,
         ];
-        let preview_scale = 2.0;
-        let preview_y = screen_height() - 150.0;
+        let preview_y = screen_height() - 220.0;
         for (i, &ph) in states.iter().enumerate() {
             let cx = 90.0 + i as f32 * 135.0;
-            let sp = sprite::build_frame(ph, 0.35, 0.0, &app.palette);
-            sprite::draw(&sp, cx - SPRITE_PX * preview_scale / 2.0, preview_y, preview_scale, &app.palette);
+            let face = kaomoji::kaomoji(ph, 0.35);
+            let accent = phase_color(ph);
             if let Some(f) = app.font.as_ref() {
+                let m = measure_text(face, Some(f), 40, 1.0);
+                draw_text_ex(
+                    face,
+                    cx - m.width / 2.0,
+                    preview_y + m.height / 2.0,
+                    TextParams { font: Some(f), font_size: 40, color: accent, ..Default::default() },
+                );
                 draw_text_ex(
                     ph.label(),
                     cx - 14.0,
-                    preview_y + SPRITE_PX * preview_scale + 14.0,
+                    preview_y + 60.0,
                     TextParams { font: Some(f), font_size: 14, color: phase_color(ph), ..Default::default() },
                 );
             }
