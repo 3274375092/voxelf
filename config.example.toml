@@ -25,8 +25,12 @@ tools = ""
 timeout_secs = 120
 
 [models]
-asr_dir = "assets/models/asr-zh"
+# 纯中文: assets/models/asr-zh(zipformer2, 默认)
+# 中英双语: assets/models/asr-zh-en-2025(zipformer2, 2025-02-10, 英文词/短语识别更好)
+asr_dir = "assets/models/asr-zh-en-2025"
 vad_model = "assets/models/vad/silero_vad.onnx"
+# ASR 模型架构: zipformer2(2024+ 中文/双语模型) | zipformer(2023 老双语模型)
+asr_model_type = "zipformer2"
 # vits(默认,快): 目录 assets/models/vits-zh, voice 为 speaker id 数字
 # kokoro(音质好): 目录 assets/models/kokoro, voice 为 xiaobei/xiaoni/xiaoxiao/xiaoyi
 tts_dir = "assets/models/vits-zh"

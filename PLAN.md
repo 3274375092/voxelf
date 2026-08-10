@@ -28,7 +28,7 @@ flowchart LR
 |---|---|---|---|
 | 麦克风采集 | `cpal` | — | 事实标准,Windows 走 WASAPI,回调式流 |
 | 音频播放 | `rodio`(基于 cpal) | 裸 cpal | 有 Sink 队列,直接喂 TTS 的 PCM |
-| 语音识别 | `sherpa-onnx` 1.13.4 | `whisper-rs` 0.16 | 流式(边说边出字)+ 内置 silero-vad,中文用 Zipformer/Parakeet 模型,CPU 实时率 <0.5。whisper 非流式、延迟高,只适合离线批量 |
+| 语音识别 | `sherpa-onnx` 1.13.4 | `whisper-rs` 0.16 | 流式(边说边出字)+ 内置 silero-vad,中文用 Zipformer/Parakeet 模型,CPU 实时率 <0.5。whisper 非流式、延迟高,只适合离线批量。英文词/短语场景可换 zipformer2 中英双语模型(`asr-zh-en-2025`,改 `asr_dir` 即可,代码零改动) |
 | 大模型 | DeepSeek API(OpenAI 兼容),`reqwest` 手写 SSE | `async-openai`(改 base_url) | DeepSeek 无 ASR/TTS 服务,只负责对话 |
 | 语音合成 | **vits-zh-ll(定稿)**: 16kHz,14字 0.65s,首句 0.15s | kokoro(中英双语,~2.2s,音质好); supertonic-3(极快但无中文); matcha zh-en(双语+快,待接入) | 中文为主场景的最优平衡;`tts_kind` 可随时切换 |
 | 渲染 | `eframe`/`egui`(glow) | `macroquad`(已弃用)、`bevy`(重) | 透明无边框置顶窗口 + 即时模式绘制,32x32 像素网格电视 + CRT 效果,托盘/窗口控制集成好 |

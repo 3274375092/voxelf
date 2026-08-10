@@ -52,6 +52,8 @@ pub struct ModelCfg {
     pub tts_voice: String,
     /// kokoro | vits(vits-zh 更快但音质略降)
     pub tts_kind: String,
+    /// ASR 模型架构: zipformer2(2024+ 中文模型,默认) | zipformer(2023 中英双语模型)
+    pub asr_model_type: String,
     pub asr_threads: i32,
     pub tts_threads: i32,
     /// VAD 语音/静音判定阈值(0-1),越低越不容易吞句尾
@@ -102,6 +104,7 @@ impl Default for ModelCfg {
             tts_model_file: "model.onnx".into(),
             tts_voice: "0".into(),
             tts_kind: "vits".into(),
+            asr_model_type: "zipformer2".into(),
             asr_threads: 2,
             tts_threads: 4,
             vad_threshold: 0.3,

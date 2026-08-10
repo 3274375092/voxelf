@@ -230,7 +230,8 @@ fn create_recognizer(cfg: &ModelCfg) -> Result<OnlineRecognizer> {
         tokens: Some(format!("{asr_dir}/tokens.txt")),
         num_threads: cfg.asr_threads,
         debug: false,
-        model_type: Some("zipformer2".into()),
+        // zipformer2(2024+ 中文模型) | zipformer(2023 中英双语模型)
+        model_type: Some(cfg.asr_model_type.clone()),
         ..Default::default()
     };
 
