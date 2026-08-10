@@ -37,19 +37,19 @@ flowchart LR
 
 成本:本地 ASR/TTS 全免费,DeepSeek 按 token 计费(很低)。若想全离线,二期可把 Brain 换成 llama.cpp/Qwen 本地模型。
 
-## 3. 像素小人
+## 3. 角色形象(颜文字方案)
 
-- **方案**:macroquad 主循环 + sprite sheet PNG(Aseprite 制作,程序加载,逐帧播放),起步阶段先用**代码生成像素矩阵**(16x16 或 32x32,定义在 Rust 里,程序上色)占位,不阻塞开发。
-- **状态 → 动画映射**:
+- **方案**:用颜文字(kaomoji)文字表情替代像素小人 —— 轻量、可爱、无素材依赖,字体字形已用 fontdue 验证(SimHei 全支持)。
+- **状态 → 表情映射**:
 
-| 状态 | 动画 |
-|---|---|
-| Idle | 待机呼吸(上下浮动 + 眨眼) |
-| Listening | 耳朵竖起 / 头顶音量条随麦克风电平波动 |
-| Thinking | 原地打转 + 头顶灯泡 |
-| Speaking | 嘴巴张合(可粗略对齐 TTS 播放时长) |
-| Working(agent 模式) | 敲键盘动作 + 屏幕闪烁 |
-| Error | 变灰 / 头顶问号 |
+| 状态 | 颜文字 | 动画 |
+|---|---|---|
+| Idle | `(｡･ω･｡)` | 周期眨眼 → `(｡-ω-｡)` + 上下浮动 |
+| Listening | `(｡>ㅅ<｡)` | 浮动(ㅅ 像竖起猫耳) |
+| Thinking | `(｡･_･｡)` | 头顶思考气泡 |
+| Speaking | `(｡･ω･｡)` ↔ `(｡･▽･｡)` | 嘴形开合 + 音符 |
+| Working | `(｀・ω・´)` | 下方小键盘 |
+| Error | `(；ω；)` | 低落 |
 
 ## 4. 并发与状态机
 
@@ -90,7 +90,7 @@ voxelf/
     ├── state.rs           # 状态机 + 事件总线
     └── ui/
         ├── app.rs         # macroquad 主循环
-        └── sprite.rs      # 像素动画播放器
+        └── kaomoji.rs     # 颜文字表情(按状态/时间驱动动画)
 ```
 
 ## 6. Agent 接入(已实现:双层大脑)
@@ -112,7 +112,7 @@ enum BrainEvent { Delta(String), Done(String), Err(String), Working(String) }
 | M0 | cargo 工程 + macroquad 窗口 + 像素小人待机动画 | 0.5–1 天 |
 | M1 | cpal 采集 → sherpa-onnx 流式 ASR → 终端打印识别文本 | 1–2 天 |
 | M2 | + DeepSeek API + TTS + 播放,终端闭环跑通 | 1 天 |
-| M3 | 状态机 + 各阶段动画 + 波形可视化 | 1–2 天 |
+| M3 | 状态机 + 各阶段动画 + 波形可视化 | ✅ 完成(颜文字方案) |
 | M4 | Brain 拆分 + jcode repl 常驻适配(Working 动画,双层大脑) | ✅ 完成 |
 | M5 | 语音打断(barge-in)、上下文记忆、情绪系统、打包分发 | 2–3 天 |
 | M6 | agent 输出清洗(代码块/过程文本→纯口语)、语音打断、上下文记忆增强 | 1–2 天 |
