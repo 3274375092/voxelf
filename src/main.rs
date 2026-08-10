@@ -43,6 +43,8 @@ enum Cmd {
     AsrDiag { text: String },
     /// 延迟定位测试: 测 TTS/ASR/各阶段耗时
     Latency { text: Option<String> },
+    /// 流式朗读测试: 分句合成并播放(验证 TTS 流式)
+    Speak { text: Option<String> },
 }
 
 fn main() -> Result<()> {
@@ -91,6 +93,32 @@ fn main() -> Result<()> {
         Cmd::Latency { text } => {
             let text = text.unwrap_or_else(|| "今天天气很好我们去公园散步吧".to_string());
             asr::run_latency_test(&cfg, &text)
+        }
+        Cmd::Speak { text } => {
+            let text = text.unwrap_or_else(|| {
+                "你好呀!我是你的像素伙伴小奶蛙。今天天气不错,我们去公园散步吧?好的,那就出发啦!".to_string()
+            });
+            let engine = tts::Tts::new(&cfg.models)?;
+            let player = audio::output::Player::new()?;
+            let sentences = split_sentences(&text);
+            let t0 = std::time::Instant::now();
+            for (i, s) in sentences.iter().enumerate() {
+                let (mut samples, rate) = engine.synthesize(s).context("语音合成失败")?;
+                if i > 0 {
+                    let pause = vec![0f32; rate as usize / 4];
+                    samples.splice(0..0, pause);
+                }
+                if i == 0 {
+                    tracing::info!("LATENCY 首句合成完成 {:.2}s,开始播放", t0.elapsed().as_secs_f32());
+                }
+                player.queue(samples, rate);
+            }
+            tracing::info!("LATENCY 全部 {} 句已入队, 播放中...", sentences.len());
+            while !player.is_idle() {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            tracing::info!("播放完成");
+            Ok(())
         }
     }
 }
@@ -238,26 +266,47 @@ async fn brain_loop(
                         };
                         tracing::info!("LATENCY 识别完成->大脑完成 {:.2}s", t0.elapsed().as_secs_f32());
 
-                        // TTS 合成(阻塞调用放 spawn_blocking)
+                        // TTS 分句流式: 逐句合成→入队播放。
+                        // 合成耗时 < 音频时长,所以第一句开播后,后续句子在播放中并行合成,几乎无缝。
                         let (Some(tts), Some(player)) = (&tts, &player) else { continue };
-                        let tts = tts.clone();
-                        let reply_for_tts = reply.clone();
-                        let tts_result = tokio::task::spawn_blocking(move || tts.synthesize(&reply_for_tts)).await;
-                        let Ok(Some((samples, rate))) = tts_result else {
+                        let sentences = split_sentences(&reply);
+                        let mut played_any = false;
+                        for (i, sentence) in sentences.iter().enumerate() {
+                            let tts = tts.clone();
+                            let s = sentence.clone();
+                            let tts_result =
+                                tokio::task::spawn_blocking(move || tts.synthesize(&s)).await;
+                            let Ok(Some((mut samples, rate))) = tts_result else {
+                                tracing::warn!("句子 {i} 合成失败,跳过: {sentence}");
+                                continue;
+                            };
+                            if played_any {
+                                // 句间停顿 0.25s,节奏更自然
+                                let pause = vec![0f32; rate as usize / 4];
+                                samples.splice(0..0, pause);
+                            }
+                            if !played_any {
+                                tracing::info!(
+                                    "LATENCY 识别完成->首句开播 {:.2}s",
+                                    t0.elapsed().as_secs_f32()
+                                );
+                            }
+                            player.queue(samples, rate);
+                            played_any = true;
+                        }
+                        if !played_any {
                             set_phase_error(&state, "语音合成失败".into());
                             continue;
-                        };
+                        }
                         tracing::info!(
-                            "LATENCY 大脑完成->TTS完成 {:.2}s (总等待 {:.2}s, 音频 {:.1}s)",
-                            t0.elapsed().as_secs_f32(),
-                            t0.elapsed().as_secs_f32(),
-                            samples.len() as f32 / rate as f32
+                            "LATENCY 全部 {} 句已入队 (总等待 {:.2}s)",
+                            sentences.len(),
+                            t0.elapsed().as_secs_f32()
                         );
                         if let Ok(mut s) = state.lock() {
                             s.reply_text = reply;
                             s.phase = Phase::Speaking;
                         }
-                        player.play(samples, rate);
                     }
                 }
             }
@@ -275,6 +324,48 @@ async fn brain_loop(
                 }
             }
         }
+    }
+}
+
+/// 按句末标点切分回复;超过 40 字无标点则硬切,保证 TTS 流式粒度。
+fn split_sentences(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut chars = 0usize;
+    for c in text.chars() {
+        cur.push(c);
+        chars += 1;
+        let hard_break = matches!(c, '。' | '！' | '？' | '…' | '!' | '?' | '.') && chars >= 2;
+        if hard_break || chars >= 40 {
+            out.push(std::mem::take(&mut cur));
+            chars = 0;
+        }
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_sentences;
+
+    #[test]
+    fn split_sentences_breaks_and_merges() {
+        let s = "今天天气很好我们去公园散步吧。明天可能会下雨,记得带伞!出门前看一下天气预报?好的";
+        let parts = split_sentences(s);
+        assert!(parts.len() >= 4, "应至少切出 4 句: {parts:?}");
+        assert!(parts.iter().all(|p| !p.trim().is_empty()));
+        assert_eq!(parts.concat(), s, "切分不应丢字");
+    }
+
+    #[test]
+    fn split_sentences_hard_cuts_long() {
+        let long = "啊".repeat(50);
+        let parts = split_sentences(&long);
+        assert!(parts.iter().all(|p| p.chars().count() <= 40));
+        assert_eq!(parts.iter().map(|p| p.chars().count()).sum::<usize>(), 50);
     }
 }
 

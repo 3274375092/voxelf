@@ -23,9 +23,9 @@ tts_dir = "assets/models/kokoro"
 tts_model_file = "model.int8.onnx"
 tts_voice = "xiaoxiao"   # xiaobei | xiaoni | xiaoxiao | xiaoyi
 asr_threads = 2
-tts_threads = 2
+tts_threads = 4
 vad_threshold = 0.3
-vad_min_silence = 0.8
+vad_min_silence = 0.5
 vad_tail_pad = 0.6   # 段弹出后追加的尾部音频,补偿渐弱尾音
 
 [ui]
