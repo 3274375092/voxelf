@@ -14,46 +14,49 @@ const ROWS: [&str; SIZE] = [
     "................................",
     "..............OOOOOO............",
     ".............OOOOOO.............",
-    "............OBBBBBBO............",
-    "............OEBEEBO.............",
-    "............OBBBBBBO............",
-    "...........OMMMMMMMO............",
-    "............OBBBBBBO............",
+    "...........OEEBEEO..............",
+    "...........OEEBEEO..............",
+    "............OMMMO...............",
+    "............OBBBO...............",
     ".............OOOOO..............",
-    "...........OOOOOOOOO............",
-    "..........OBBBBBBBBBO...........",
-    ".........OBBBBBBBBBBBO..........",
-    ".........OBBBBBBBBBBBO..........",
+    "..........OOOOOOOOO.............",
+    ".........OBBBBBBBBBO............",
+    "........OBBBBBBBBBBBO...........",
+    "........OBCBBBBBBBBBCBO.........",
     "........OBBBBBBBBBBBBBO.........",
-    "........OBBWWWWWWWWWBBBO........",
-    "........OBBWWWWWWWWWBBBO........",
-    "........OBBWWWWWWWWWBBBO........",
-    "........OBBBBBBBBBBBBBO.........",
-    "........OBBBBBBBBBBBBBO.........",
-    ".........OBBBBBBBBBBBO..........",
-    "..........OBBBBBBBBBO...........",
-    "..........OBBBBBBBBBO...........",
-    ".........OBBBBBBBBBBBO..........",
-    "........OOOOOOOOOOOOOOO.........",
-    "......OOOOOOOOOOOOOOOOOOO.......",
     ".......OBBBBBBBBBBBBBO..........",
-    "......OBFFFFFFFFFFFFFFBO........",
-    "......OFFFFFFFFFFFFFFFFO........",
+    ".......OBBBBBBBBBBBBBBO.........",
+    ".......OBBWWWWWWWWWWBBO.........",
+    ".......OBBWWWWWWWWWWBBO.........",
+    ".......OBBWWWWWWWWWWBBO.........",
+    ".......OBBBBBBBBBBBBBBO.........",
+    ".......OBBBBBBBBBBBBBBO.........",
+    ".......OBBBBBBBBBBBBBBO.........",
+    "........OBBBBBBBBBBBBBO.........",
+    "........OBBBBBBBBBBBBBO.........",
+    ".........OBBBBBBBBBBBO..........",
+    "..........OOOOOOOOOOO...........",
+    "........OOOOOOOOOOOOO...........",
+    ".......OOOOOOOOOOOOOOO..........",
+    "......OOOOOOOOOOOOOOOOO.........",
     "................................",
 ];
 
-/// 眼睛所在的格子(大小眼:左小右大,五官失调;眨眼时替换为身体色)
-const EYES: [(usize, usize); 3] = [(13, 7), (15, 7), (16, 7)];
+/// 眼睛所在的格子(两颗 2x2 大眼,靠上靠中;眨眼时替换为身体色)
+const EYES: [(usize, usize); 8] = [
+    (12, 6), (13, 6), (12, 7), (13, 7),
+    (15, 6), (16, 6), (15, 7), (16, 7),
+];
 /// 眼神光(睁眼时保留,闭眼时消失)
-const HIGHLIGHTS: [(usize, usize); 2] = [(12, 6), (17, 6)];
+const HIGHLIGHTS: [(usize, usize); 2] = [(13, 6), (15, 6)];
 /// 聆听时头顶竖起的小耳羽(奶油色)
 const EARS: [(usize, usize); 8] = [
-    (11, 5), (12, 5), (11, 6), (12, 6),
+    (10, 5), (11, 5), (10, 6), (11, 6),
     (19, 5), (20, 5), (19, 6), (20, 6),
 ];
-/// 嘴巴所在行与列范围(狂笑大嘴,几乎占满整张脸)
-const MOUTH_ROW: usize = 9;
-const MOUTH_COLS: std::ops::Range<usize> = 11..19;
+/// 嘴巴所在行与列范围(小嘴)
+const MOUTH_ROW: usize = 8;
+const MOUTH_COLS: std::ops::Range<usize> = 13..16;
 
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -76,17 +79,17 @@ pub struct Palette {
 impl Default for Palette {
     fn default() -> Self {
         Self {
-            outline: Color::from_hex(0x4a2f1e),
-            skin: Color::from_hex(0xfff3d6),
-            hair: Color::from_hex(0xffc94d),
-            body: Color::from_hex(0xffc94d),
-            body_dark: Color::from_hex(0xf5a623),
-            eye: Color::from_hex(0x3a2417),
-            cheek: Color::from_hex(0xffb38a),
-            feet: Color::from_hex(0xe08f2e),
-            cream: Color::from_hex(0xfff3d6),
+            outline: Color::from_hex(0x7a4a26),
+            skin: Color::from_hex(0xfff0b0),
+            hair: Color::from_hex(0xfad44e),
+            body: Color::from_hex(0xfad44e),
+            body_dark: Color::from_hex(0xe8b93c),
+            eye: Color::from_hex(0x5a3a20),
+            cheek: Color::from_hex(0xf08c3c),
+            feet: Color::from_hex(0xe8b93c),
+            cream: Color::from_hex(0xfff0b0),
             highlight: Color::from_hex(0xffffff),
-            mouth: Color::from_hex(0x7a4a2b),
+            mouth: Color::from_hex(0x7a4a26),
         }
     }
 }
@@ -118,10 +121,10 @@ impl Sprite {
         }
     }
 
-    /// 嘴巴张开程度: 0.0 闭嘴(身体色), 1.0 大张嘴(狂笑)
+    /// 嘴巴张开程度: 0.0 闭嘴(身体色), 1.0 大张嘴
     pub fn mouth(&mut self, open: f32) {
-        let n = (open * 7.0).round() as usize;
-        let pad = (7 - n) / 2;
+        let n = (open * 3.0).round() as usize;
+        let pad = (3 - n) / 2;
         for (i, x) in MOUTH_COLS.enumerate() {
             self.grid[MOUTH_ROW][x] = if n > 0 && i >= pad && i < pad + n { 'M' } else { 'B' };
         }
