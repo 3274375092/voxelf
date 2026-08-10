@@ -101,8 +101,8 @@ enum BrainEvent { Delta(String), Done(String), Err(String), Working(String) }
 
 - **常驻 `jcode repl` 进程**(无 TUI 的简单 REPL):voxelf 启动后 lazily spawn 一次,每轮请求写一行 stdin、按行读 stdout。**实测首轮 1.29s、第二轮 1.02s**,对比 `jcode run` 冷启动 6.1s(其中 5.3s 是固定进程初始化,与工具数/provider/socket 无关),提速约 5 倍。
 - **输出行解析**(`classify`):banner / `[Tokens]` 元信息 / `[工具名] 参数`(→ Working 事件)/ ` → 工具结果回显`(不朗读)/ `> 正文`(→ Delta)分门别类;轮结束判定 = 空 prompt 或 `[Tokens]` 后双空行(工具轮中间的 `[Tokens]` 后只有单空行,不会误断)。
-- **双层分流**(`hybrid.rs`):纯规则意图判断(零延迟零成本),命中"操作类"词表(帮我写/删/整理/下载/打开/运行… + 动作词×对象词组合)走 agent,否则走 DeepSeek(首字 0.5s)。jcode 未安装或 `agent.enabled=false` 自动降级为纯 DeepSeek。
-- **安全**:默认 `--tool-profile minimal`(只读工具集),或 `--tools read,write,edit` 白名单;`timeout_secs` 超时自动杀进程重启。操作类请求 token 成本 2~4k input(工具白名单后),约闲聊 3~4 倍。
+- **双层大脑(agent-first,`hybrid.rs`)**:检测到 jcode 时**所有**请求都走常驻 agent(工具/联网/上下文记忆全具备),未安装或禁用时自动降级纯 DeepSeek。每轮请求注入 Vox 人设(简短口语化、无列表/markdown/emoji、句号分隔),保证语音朗读体验与 DeepSeek 直连一致。
+- **安全**:默认 `--tool-profile minimal`(只读工具集),或 `--tools read,write,edit,websearch,webfetch` 白名单(联网搜索/抓取,实测天气查询:websearch 被 DDG 反爬拦截时 agent 自动降级 webfetch 抓 wttr.in);`timeout_secs` 超时自动杀进程重启。
 - Brain trait 同时被 DeepSeek、Agent、Hybrid 实现,UI/音频层不感知差异。
 
 ## 7. 里程碑(按序交付)
@@ -115,7 +115,7 @@ enum BrainEvent { Delta(String), Done(String), Err(String), Working(String) }
 | M3 | 状态机 + 各阶段动画 + 波形可视化 | 1–2 天 |
 | M4 | Brain 拆分 + jcode repl 常驻适配(Working 动画,双层大脑) | ✅ 完成 |
 | M5 | 语音打断(barge-in)、上下文记忆、情绪系统、打包分发 | 2–3 天 |
-| M6 | agent 输出清洗(markdown/代码块→口语化)、意图判断升级(LLM 双保险)、工具链扩展 | 1–2 天 |
+| M6 | agent 输出清洗(代码块/过程文本→纯口语)、语音打断、上下文记忆增强 | 1–2 天 |
 
 ## 8. 风险与对策
 
