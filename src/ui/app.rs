@@ -21,6 +21,8 @@ pub struct VoxApp {
     locked: bool,
     topmost: bool,
     quitting: bool,
+    /// 自维护可见性(不读 viewport 报告: 隐藏后 viewport 报 stale,依赖它无法恢复)
+    visible: bool,
     /// 托盘动作反馈(字幕短暂显示,确认命令生效)
     feedback: Option<(String, f64)>,
 }
@@ -45,6 +47,7 @@ impl VoxApp {
             locked: false,
             topmost: true,
             quitting: false,
+            visible: true,
             feedback: None,
         }
     }
@@ -433,6 +436,7 @@ impl eframe::App for VoxApp {
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.visible = false;
         }
     }
 
@@ -441,6 +445,7 @@ impl eframe::App for VoxApp {
         self.handle_tray(ui.ctx());
         // Esc → 隐藏到托盘
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.visible = false;
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
             return;
         }
@@ -462,10 +467,10 @@ impl VoxApp {
         if let Some(action) = tray_action {
             match action {
                 TrayAction::ToggleVisible => {
-                    let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
-                    let next = toggle_visible(visible);
-                    tracing::info!("托盘: 切换可见性 {visible} → {next}");
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(next));
+                    // 自维护状态取反(隐藏后 viewport 报告 stale,不能依赖它)
+                    self.visible = toggle_visible(self.visible);
+                    tracing::info!("托盘: 切换可见性 → {}", self.visible);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.visible));
                 }
                 TrayAction::ToggleLock => {
                     self.locked = !self.locked;
@@ -542,16 +547,11 @@ pub fn run_ui(state: SharedState) -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             setup_fonts(&cc.egui_ctx);
-            // 托盘事件到达时唤醒 eframe(窗口隐藏时事件循环休眠,必须显式唤醒,
-            // 否则隐藏到托盘后无法恢复显示)
-            let wake = cc.egui_ctx.clone();
-            muda::MenuEvent::set_event_handler(Some(move |_| {
-                wake.request_repaint();
-            }));
-            let wake2 = cc.egui_ctx.clone();
-            tray_icon::TrayIconEvent::set_event_handler(Some(move |_| {
-                wake2.request_repaint();
-            }));
+            // 注意: 不要用 set_event_handler —— 它会覆盖 tray-icon 默认的
+            // channel 投递,导致 MenuEvent::receiver()/TrayIconEvent::receiver()
+            // 永远收不到事件(实测托盘命令全部失效)。
+            // 唤醒由 logic() 的 request_repaint_after 自维持循环保证
+            // (窗口隐藏时 logic 仍持续调度,poll 照常执行)。
             Ok(Box::new(VoxApp::new(state, tray)))
         }),
     )
@@ -598,6 +598,26 @@ mod tests {
         assert!(visible, "处理后窗口恢复显示");
         assert!(ui_calls > 0, "窗口恢复后 ui 应恢复调用");
         assert!(logic_calls >= 10, "logic 层应每帧调度");
+    }
+
+    /// 复现测试: 窗口隐藏后 viewport().visible() 可能报告 stale 值(仍为 true),
+    /// 依赖它取反会导致"再次点击仍是 true→false",永远无法恢复显示。
+    /// 修复: App 自维护可见性状态,不读 viewport 报告。
+    #[test]
+    fn hidden_viewport_reports_stale_visible() {
+        let mut app_visible = true; // App 自维护状态
+        let mut viewport_visible = true; // 模拟 eframe viewport 报告
+        // 第一次点击: 隐藏
+        app_visible = toggle_visible(app_visible);
+        assert!(!app_visible, "第一次点击后应隐藏");
+        // 窗口隐藏后,viewport 报告冻结(仍报 true,不再更新)
+        viewport_visible = true; // stale
+        // 第二次点击: 若依赖 viewport 读取 → 错误地取反为 false(再次隐藏)
+        let wrong = toggle_visible(viewport_visible);
+        assert!(!wrong, "依赖 stale viewport 报告无法恢复显示");
+        // 正确做法: 自维护状态 → 恢复显示
+        let right = toggle_visible(app_visible);
+        assert!(right, "自维护状态可恢复显示");
     }
 
     /// 可见性切换: 隐藏(false)→ 显示(true),显示 → 隐藏

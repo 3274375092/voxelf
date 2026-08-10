@@ -1,3 +1,0 @@
-[2m2026-08-10T12:57:06.222322Z[0m [32m INFO[0m [2mvoxelf::audio::input[0m[2m:[0m 麦克风: "麦克风阵列 (适用于数字麦克风的英特尔® 智音技术)" 格式 F32 声道 4 采样率 48000
-[2m2026-08-10T12:57:06.862287Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m eframe 字体加载: assets/fonts/SimHei.ttf
-[2m2026-08-10T12:57:07.663809Z[0m [32m INFO[0m [2mvoxelf::tts[0m[2m:[0m TTS 初始化完成(vits): 采样率 16000 speaker 0
