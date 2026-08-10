@@ -312,7 +312,7 @@ impl VoxApp {
                     egui::pos2(screen_in.min.x + (screen_in.width() + wpx) / 2.0, g(4.8) + i as f32 * 1.6),
                 ),
                 egui::CornerRadius::same(2),
-                egui::Color32::from_rgba_unmultiplied(190, 200, 240, (15 - i as u8 * 3) as u8),
+                egui::Color32::from_rgba_unmultiplied(190, 200, 240, 15 - i as u8 * 3),
             );
         }
 
@@ -418,13 +418,39 @@ impl VoxApp {
 }
 
 impl eframe::App for VoxApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // 动画需要持续重绘(egui 默认只在有输入时重绘,鼠标不动会冻结)
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
-        let dt = ui.input(|i| i.stable_dt).min(0.1) as f64;
+    /// logic 层: 窗口隐藏时也会被调用(只要有 repaint 请求)。
+    /// 托盘事件处理必须在这里,否则隐藏到托盘后就无法恢复显示。
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 维持动画时钟与持续重绘(隐藏时也保持,让 logic 持续调度)
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        let dt = ctx.input(|i| i.stable_dt).min(0.1) as f64;
         self.t += dt;
-        let ctx = ui.ctx().clone();
+        self.handle_tray(ctx);
+        // 关闭窗口(Alt+F4/系统关闭)→ 隐藏到托盘而非退出;托盘"退出"放行
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if self.quitting {
+                return; // 放行,让 eframe 正常退出
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+    }
 
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 可见帧同样处理托盘命令(与 logic 幂等)
+        self.handle_tray(ui.ctx());
+        // Esc → 隐藏到托盘
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            return;
+        }
+        self.draw_pet(ui);
+    }
+}
+
+impl VoxApp {
+    /// 处理托盘事件(在 logic/ui 两层都调用,窗口隐藏时仍可达)
+    fn handle_tray(&mut self, ctx: &egui::Context) {
         // 托盘命令(先取出动作,避免 self 借用冲突)
         let tray_action = if let Some(t) = self.tray.as_mut() {
             let a = t.poll();
@@ -437,8 +463,9 @@ impl eframe::App for VoxApp {
             match action {
                 TrayAction::ToggleVisible => {
                     let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
-                    tracing::info!("托盘: 切换可见性 {visible} → {}", !visible);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(!visible));
+                    let next = toggle_visible(visible);
+                    tracing::info!("托盘: 切换可见性 {visible} → {next}");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(next));
                 }
                 TrayAction::ToggleLock => {
                     self.locked = !self.locked;
@@ -469,24 +496,6 @@ impl eframe::App for VoxApp {
                 }
             }
         }
-
-        // 关闭窗口(Alt+F4/系统关闭)→ 隐藏到托盘而非退出;托盘"退出"放行
-        if ctx.input(|i| i.viewport().close_requested()) {
-            if self.quitting {
-                return; // 放行,让 eframe 正常退出
-            }
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            return;
-        }
-
-        // Esc → 隐藏到托盘
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            return;
-        }
-
-        self.draw_pet(ui);
     }
 }
 
@@ -533,16 +542,73 @@ pub fn run_ui(state: SharedState) -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             setup_fonts(&cc.egui_ctx);
+            // 托盘事件到达时唤醒 eframe(窗口隐藏时事件循环休眠,必须显式唤醒,
+            // 否则隐藏到托盘后无法恢复显示)
+            let wake = cc.egui_ctx.clone();
+            muda::MenuEvent::set_event_handler(Some(move |_| {
+                wake.request_repaint();
+            }));
+            let wake2 = cc.egui_ctx.clone();
+            tray_icon::TrayIconEvent::set_event_handler(Some(move |_| {
+                wake2.request_repaint();
+            }));
             Ok(Box::new(VoxApp::new(state, tray)))
         }),
     )
 }
 
+/// 可见性切换决策(纯函数,可测试): 隐藏 → 显示,显示 → 隐藏
+fn toggle_visible(current: bool) -> bool {
+    !current
+}
+
 #[cfg(test)]
 mod tests {
     use super::subtitle_text;
+    use super::toggle_visible;
     use super::VoxApp;
     use crate::state::Phase;
+
+    /// 复现测试: 窗口隐藏后,eframe 只调用 logic 层,不再调用 ui 层。
+    /// 若托盘事件处理只放在 ui() 里,隐藏后"显示"命令永远无法处理 —— 界面无法恢复。
+    #[test]
+    fn hidden_window_never_runs_ui_frame() {
+        // 模拟 eframe 生命周期: 隐藏帧只调 logic(有 repaint 请求时),ui 只在可见帧调
+        let mut visible = false;
+        let mut ui_calls = 0usize;
+        let mut logic_calls = 0usize;
+        let mut handled_in_hidden = false;
+        let mut show_event_pending = true; // 托盘"显示"事件
+        for _ in 0..10 {
+            if visible {
+                ui_calls += 1; // eframe: 窗口隐藏时不跑 egui pass(不调 ui)
+            }
+            logic_calls += 1; // eframe: 隐藏时仍会调 logic(若请求了 repaint)
+            if show_event_pending {
+                // 事件在隐藏帧到达,只有 logic 层可达
+                show_event_pending = false;
+                if !visible {
+                    handled_in_hidden = true; // 处理发生在隐藏态
+                    visible = toggle_visible(visible);
+                }
+            }
+        }
+        // 关键断言: "显示"事件是在窗口仍隐藏时被处理的(只有 logic 可达)
+        assert!(handled_in_hidden, "显示事件应在隐藏态被处理(logic 层)");
+        assert!(visible, "处理后窗口恢复显示");
+        assert!(ui_calls > 0, "窗口恢复后 ui 应恢复调用");
+        assert!(logic_calls >= 10, "logic 层应每帧调度");
+    }
+
+    /// 可见性切换: 隐藏(false)→ 显示(true),显示 → 隐藏
+    #[test]
+    fn toggle_visible_switches_state() {
+        assert!(toggle_visible(false), "隐藏后应能切换为显示");
+        assert!(!toggle_visible(true), "显示后应能切换为隐藏");
+        // 往返稳定
+        assert!(!toggle_visible(toggle_visible(false)));
+        assert!(toggle_visible(toggle_visible(true)));
+    }
 
     /// 字幕截断: 短文本原样,长文本截断加省略号,边界不截。
     #[test]

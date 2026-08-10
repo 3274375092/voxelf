@@ -167,10 +167,10 @@ impl Tray {
             return Some(action);
         }
         // 双击托盘图标 → 显示/隐藏
-        if let Ok(ev) = tray_icon::TrayIconEvent::receiver().try_recv() {
-            if matches!(ev, tray_icon::TrayIconEvent::DoubleClick { .. }) {
-                return Some(TrayAction::ToggleVisible);
-            }
+        if let Ok(ev) = tray_icon::TrayIconEvent::receiver().try_recv()
+            && matches!(ev, tray_icon::TrayIconEvent::DoubleClick { .. })
+        {
+            return Some(TrayAction::ToggleVisible);
         }
         None
     }
