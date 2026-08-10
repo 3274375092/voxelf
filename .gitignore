@@ -8,6 +8,7 @@ _*.rs
 _src/
 _*.crate
 smoke_*.png
-# 运行时日志(启动时自动创建/轮转)
+diag_*.wav
+# 运行时日�?启动时自动创�?轮转)
 /voxelf.log
 /voxelf.log.*
