@@ -18,6 +18,8 @@ pub struct VoxApp {
     state: SharedState,
     t: f64,
     tray: Option<Tray>,
+    /// 事件转发线程 → UI 的动作通道(不依赖 eframe 帧循环)
+    tray_rx: Option<flume::Receiver<TrayAction>>,
     locked: bool,
     topmost: bool,
     quitting: bool,
@@ -39,11 +41,12 @@ fn subtitle_text(text: &str, max_chars: usize) -> String {
 }
 
 impl VoxApp {
-    pub fn new(state: SharedState, tray: Option<Tray>) -> Self {
+    pub fn new(state: SharedState, tray: Option<Tray>, tray_rx: Option<flume::Receiver<TrayAction>>) -> Self {
         Self {
             state,
             t: 0.0,
             tray,
+            tray_rx,
             locked: false,
             topmost: true,
             quitting: false,
@@ -454,17 +457,15 @@ impl eframe::App for VoxApp {
 }
 
 impl VoxApp {
-    /// 处理托盘事件(在 logic/ui 两层都调用,窗口隐藏时仍可达)
+    /// 处理托盘动作(由事件转发线程捕获,经 channel 送达;不依赖帧循环)
     fn handle_tray(&mut self, ctx: &egui::Context) {
-        // 托盘命令(先取出动作,避免 self 借用冲突)
-        let tray_action = if let Some(t) = self.tray.as_mut() {
-            let a = t.poll();
-            t.sync(self.locked, self.topmost);
-            a
-        } else {
-            None
-        };
+        // 收动作(先取出,避免 self 借用冲突)
+        let tray_action = self.tray_rx.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(action) = tray_action {
+            if let Some(t) = self.tray.as_ref() {
+                t.sync_checked(action);
+                t.sync(self.locked, self.topmost);
+            }
             match action {
                 TrayAction::ToggleVisible => {
                     // 自维护状态取反(隐藏后 viewport 报告 stale,不能依赖它)
@@ -530,6 +531,8 @@ pub fn run_ui(state: SharedState) -> eframe::Result<()> {
     if tray.is_none() {
         tracing::warn!("托盘初始化失败,继续无托盘运行");
     }
+    // 事件转发线程: 托盘事件不依赖 eframe 帧循环,独立线程捕获 + 唤醒
+    let (tray_tx, tray_rx) = flume::unbounded::<TrayAction>();
     let viewport = egui::ViewportBuilder::default()
         .with_title("voxelf - 语音像素伙伴")
         .with_inner_size([PET_W, PET_H])
@@ -547,12 +550,13 @@ pub fn run_ui(state: SharedState) -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             setup_fonts(&cc.egui_ctx);
-            // 注意: 不要用 set_event_handler —— 它会覆盖 tray-icon 默认的
-            // channel 投递,导致 MenuEvent::receiver()/TrayIconEvent::receiver()
-            // 永远收不到事件(实测托盘命令全部失效)。
-            // 唤醒由 logic() 的 request_repaint_after 自维持循环保证
-            // (窗口隐藏时 logic 仍持续调度,poll 照常执行)。
-            Ok(Box::new(VoxApp::new(state, tray)))
+            // 独立线程捕获托盘事件(不依赖帧循环,窗口休眠也能即时响应)
+            let wake = {
+                let ctx = cc.egui_ctx.clone();
+                move || ctx.request_repaint()
+            };
+            crate::tray::spawn_event_forwarder(tray_tx, wake);
+            Ok(Box::new(VoxApp::new(state, tray, Some(tray_rx))))
         }),
     )
 }

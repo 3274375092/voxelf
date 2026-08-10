@@ -106,6 +106,30 @@ pub fn is_autostart() -> bool {
     hkcu.get_value::<String, _>(AUTOSTART_NAME).is_ok()
 }
 
+/// 独立线程: 持续轮询托盘/菜单事件,立即转发到 channel 并唤醒 eframe。
+/// 不依赖 eframe 帧循环 —— 窗口隐藏或休眠时也能即时捕获事件,
+/// 否则事件要等鼠标移动触发重绘才被处理(实测延迟)。
+pub fn spawn_event_forwarder(
+    tx: flume::Sender<TrayAction>,
+    wake: impl Fn() + Send + Sync + 'static,
+) {
+    std::thread::spawn(move || loop {
+        if let Ok(ev) = muda::MenuEvent::receiver().try_recv() {
+            if let Some(a) = action_for_id(ev.id.0.as_str()) {
+                let _ = tx.send(a);
+                wake();
+            }
+        }
+        if let Ok(ev) = tray_icon::TrayIconEvent::receiver().try_recv()
+            && matches!(ev, tray_icon::TrayIconEvent::DoubleClick { .. })
+        {
+            let _ = tx.send(TrayAction::ToggleVisible);
+            wake();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    });
+}
+
 impl Tray {
     pub fn new() -> Option<Self> {
         // 菜单项 id 需稳定字符串
@@ -142,37 +166,22 @@ impl Tray {
         })
     }
 
-    /// 每帧 poll 托盘事件,返回需要执行的动作(最多一个)
-    pub fn poll(&mut self) -> Option<TrayAction> {
-        // 菜单点击
-        if let Ok(ev) = muda::MenuEvent::receiver().try_recv() {
-            let action = action_for_id(ev.id.0.as_str())?;
-            // 切换类菜单项: 同步勾选状态
-            match action {
-                TrayAction::ToggleLock => {
-                    let next = !self.lock_item.is_checked();
-                    self.lock_item.set_checked(next);
-                }
-                TrayAction::ToggleTopmost => {
-                    let next = !self.topmost_item.is_checked();
-                    self.topmost_item.set_checked(next);
-                }
-                TrayAction::ToggleAutostart => {
-                    let next = !self.autostart_item.is_checked();
-                    let _ = set_autostart(next);
-                    self.autostart_item.set_checked(next);
-                }
-                _ => {}
+    /// 动作已由事件转发线程捕获;此处同步菜单勾选状态与注册表。
+    pub fn sync_checked(&self, action: TrayAction) {
+        match action {
+            TrayAction::ToggleLock => {
+                self.lock_item.set_checked(!self.lock_item.is_checked());
             }
-            return Some(action);
+            TrayAction::ToggleTopmost => {
+                self.topmost_item.set_checked(!self.topmost_item.is_checked());
+            }
+            TrayAction::ToggleAutostart => {
+                let next = !self.autostart_item.is_checked();
+                let _ = set_autostart(next);
+                self.autostart_item.set_checked(next);
+            }
+            _ => {}
         }
-        // 双击托盘图标 → 显示/隐藏
-        if let Ok(ev) = tray_icon::TrayIconEvent::receiver().try_recv()
-            && matches!(ev, tray_icon::TrayIconEvent::DoubleClick { .. })
-        {
-            return Some(TrayAction::ToggleVisible);
-        }
-        None
     }
 
     /// 同步 UI 侧状态到菜单(锁定/置顶被 UI 改变时)
