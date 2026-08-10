@@ -41,6 +41,8 @@ enum Cmd {
     Chat { text: String },
     /// ASR 定位测试: TTS 合成已知文本,三模式对照找"吞句尾"问题
     AsrDiag { text: String },
+    /// 延迟定位测试: 测 TTS/ASR/各阶段耗时
+    Latency { text: Option<String> },
 }
 
 fn main() -> Result<()> {
@@ -86,6 +88,10 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::AsrDiag { text } => asr::run_asr_diag(&cfg, &text),
+        Cmd::Latency { text } => {
+            let text = text.unwrap_or_else(|| "今天天气很好我们去公园散步吧".to_string());
+            asr::run_latency_test(&cfg, &text)
+        }
     }
 }
 
@@ -206,6 +212,7 @@ async fn brain_loop(
                             tracing::info!("忽略 utterance(正在处理): {text}");
                             continue;
                         }
+                        let t0 = std::time::Instant::now();
                         if let Ok(mut s) = state.lock() {
                             s.last_user_text = text.clone();
                             s.asr_partial.clear();
@@ -229,6 +236,7 @@ async fn brain_loop(
                                 continue;
                             }
                         };
+                        tracing::info!("LATENCY 识别完成->大脑完成 {:.2}s", t0.elapsed().as_secs_f32());
 
                         // TTS 合成(阻塞调用放 spawn_blocking)
                         let (Some(tts), Some(player)) = (&tts, &player) else { continue };
@@ -239,6 +247,12 @@ async fn brain_loop(
                             set_phase_error(&state, "语音合成失败".into());
                             continue;
                         };
+                        tracing::info!(
+                            "LATENCY 大脑完成->TTS完成 {:.2}s (总等待 {:.2}s, 音频 {:.1}s)",
+                            t0.elapsed().as_secs_f32(),
+                            t0.elapsed().as_secs_f32(),
+                            samples.len() as f32 / rate as f32
+                        );
                         if let Ok(mut s) = state.lock() {
                             s.reply_text = reply;
                             s.phase = Phase::Speaking;

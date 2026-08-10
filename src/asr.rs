@@ -136,6 +136,7 @@ impl Asr {
 
     /// 对一段完整语音做流式识别,返回 Partial/Final 事件。
     fn recognize_segment(&mut self, seg: &[f32]) -> Vec<AsrEvent> {
+        let t0 = std::time::Instant::now();
         let mut events = Vec::new();
         let stream = self.recognizer.create_stream();
         let mut last = String::new();
@@ -156,6 +157,11 @@ impl Asr {
 
         if let Some(r) = self.recognizer.get_result(&stream) {
             let text = r.text.trim().to_string();
+            tracing::info!(
+                "LATENCY ASR 段 {:.2}s 解码耗时 {:.2}s",
+                seg.len() as f32 / self.sample_rate as f32,
+                t0.elapsed().as_secs_f32()
+            );
             if !text.is_empty() {
                 if !events.is_empty() {
                     // 用最终结果顶掉最后的 Partial
@@ -353,6 +359,74 @@ fn report(tag: &str, vad: &VadParams, segments: &[f32], result: &str, target: &s
     }
     println!("   识别    : {result}");
     println!("   与目标 : {}", diff_line(result, target));
+}
+
+/// 全链路离线延迟测试: TTS 合成已知文本 → 按真实时间节奏喂给 ASR → 测各阶段耗时。
+/// 输出用户最关心的数字: "说完话后多久出识别结果"(含 VAD 静音判定 + 解码)。
+pub fn run_latency_test(cfg: &Config, text: &str) -> Result<()> {
+    use std::time::Instant;
+    println!("========== 延迟定位测试 ==========");
+    println!("目标: {text}");
+
+    // 1. TTS
+    let tts = crate::tts::Tts::new(&cfg.models)?;
+    let t0 = Instant::now();
+    let (samples, rate) = tts.synthesize(text).context("TTS 合成失败")?;
+    let tts_s = t0.elapsed().as_secs_f32();
+    println!(
+        "[TTS] 合成耗时 {tts_s:.2}s, 音频 {:.1}s",
+        samples.len() as f32 / rate as f32
+    );
+
+    // 2. ASR: 模拟实时麦克风(100ms 块 + 真实时间间隔),前后补 0.3s 静音
+    let samples16 = resample_linear(&samples, rate as i32, 16000);
+    let pad = 4800; // 0.3s @ 16k
+    let mut audio = vec![0f32; pad];
+    audio.extend_from_slice(&samples16);
+    audio.extend_from_slice(&vec![0f32; pad]);
+    let true_end = audio
+        .iter()
+        .rposition(|&s| s.abs() > 0.01)
+        .map(|i| i as f32 / 16000.0)
+        .unwrap_or(0.0);
+
+    let mut asr = Asr::new(&cfg.models)?;
+    let feed_start = Instant::now();
+    let mut final_at: Option<Instant> = None;
+    let mut final_text = String::new();
+    for w in audio.chunks(1600) {
+        for ev in asr.feed(&AudioChunk { samples: w.to_vec(), sample_rate: 16000 }) {
+            if let AsrEvent::Final(t) = ev {
+                final_at = Some(Instant::now());
+                final_text = t;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100)); // 实时节奏
+    }
+    // 说完后继续等 VAD 收尾(最多 6s)
+    let mut waited = 0.0f32;
+    while final_at.is_none() && waited < 6.0 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        waited += 0.1;
+        for ev in asr.feed(&AudioChunk { samples: vec![0.0; 1600], sample_rate: 16000 }) {
+            if let AsrEvent::Final(t) = ev {
+                final_at = Some(Instant::now());
+                final_text = t;
+            }
+        }
+    }
+    match final_at {
+        Some(ft) => {
+            let total = ft.duration_since(feed_start).as_secs_f32();
+            let after_speech = total - true_end;
+            println!("[ASR] 识别结果: {final_text}");
+            println!(
+                "[ASR] 说完后 {after_speech:.2}s 出结果 (语音末尾 {true_end:.2}s; 含 VAD 静音判定 + 解码)"
+            );
+        }
+        None => println!("[ASR] 6s 内未出结果!"),
+    }
+    Ok(())
 }
 
 /// 在专用线程里跑 ASR 循环:接收麦克风 chunk,发事件。

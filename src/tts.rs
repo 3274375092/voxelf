@@ -44,10 +44,18 @@ impl Tts {
 
     /// 合成一段语音,返回 (PCM f32, 采样率)。阻塞调用。
     pub fn synthesize(&self, text: &str) -> Option<(Vec<f32>, u32)> {
+        let t0 = std::time::Instant::now();
         let gen_cfg = GenerationConfig { sid: self.voice_id, speed: 1.0, ..Default::default() };
         let audio = self.engine.generate_with_config(text, &gen_cfg, None::<fn(&[f32], f32) -> bool>)?;
         let rate = self.engine.sample_rate();
-        Some((audio.samples().to_vec(), rate as u32))
+        let samples = audio.samples().to_vec();
+        tracing::info!(
+            "LATENCY TTS 合成 {:.2}s ({}字 -> 音频 {:.1}s)",
+            t0.elapsed().as_secs_f32(),
+            text.chars().count(),
+            samples.len() as f32 / rate as f32
+        );
+        Some((samples, rate as u32))
     }
 }
 

@@ -59,6 +59,8 @@ impl DeepSeekBrain {
         let mut full = String::new();
         let mut buf: Vec<u8> = Vec::new();
         let mut stream = resp.bytes_stream();
+        let t0 = std::time::Instant::now();
+        let mut first_token_at: Option<std::time::Instant> = None;
 
         while let Some(chunk) = stream.next().await {
             match chunk {
@@ -81,12 +83,23 @@ impl DeepSeekBrain {
                 if let Ok(v) = serde_json::from_str::<Value>(data) {
                     if let Some(delta) = v["choices"][0]["delta"]["content"].as_str() {
                         if !delta.is_empty() {
+                            if first_token_at.is_none() {
+                                first_token_at = Some(std::time::Instant::now());
+                            }
                             full.push_str(delta);
                             events.push(BrainEvent::Delta(delta.to_string()));
                         }
                     }
                 }
             }
+        }
+        if let Some(ft) = first_token_at {
+            tracing::info!(
+                "LATENCY LLM 首字 {:.2}s 全文 {:.2}s ({}字)",
+                ft.duration_since(t0).as_secs_f32(),
+                t0.elapsed().as_secs_f32(),
+                full.chars().count()
+            );
         }
 
         let reply = full.trim().to_string();
