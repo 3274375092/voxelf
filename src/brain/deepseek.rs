@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -13,9 +15,19 @@ pub struct DeepSeekBrain {
     history: Vec<Value>,
 }
 
+/// 连接建立超时。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// 流式响应相邻数据块的最大间隔: 超过则判定链路挂死(避免永远卡在思考中)。
+/// 生成中的块间隔远小于此值,长回复不受影响。
+const STREAM_CHUNK_TIMEOUT: Duration = Duration::from_secs(60);
+
 impl DeepSeekBrain {
     pub fn new(cfg: &DeepSeekCfg) -> Self {
-        Self { client: Client::new(), cfg: cfg.clone(), history: Vec::new() }
+        let client = Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .build()
+            .unwrap_or_default();
+        Self { client, cfg: cfg.clone(), history: Vec::new() }
     }
 
     pub async fn run_streaming(&mut self, text: &str, tx: flume::Sender<BrainEvent>) {
@@ -71,14 +83,25 @@ impl DeepSeekBrain {
         let t0 = std::time::Instant::now();
         let mut first_token_at: Option<std::time::Instant> = None;
 
-        while let Some(chunk) = stream.next().await {
-            match chunk {
-                Ok(c) => buf.extend_from_slice(&c),
-                Err(e) => {
+        // 逐块读取,带超时: 连接后长时间收不到任何数据视为链路挂死
+        // (reqwest 默认无超时,旧代码会永远卡在思考中)。
+        loop {
+            let chunk = match tokio::time::timeout(STREAM_CHUNK_TIMEOUT, stream.next()).await {
+                Ok(Some(Ok(c))) => c,
+                Ok(Some(Err(e))) => {
                     send(BrainEvent::Err(format!("读取回复流失败: {e}")));
                     break;
                 }
-            }
+                Ok(None) => break, // 流正常结束
+                Err(_) => {
+                    send(BrainEvent::Err(format!(
+                        "DeepSeek 响应超时({}s 无数据)",
+                        STREAM_CHUNK_TIMEOUT.as_secs()
+                    )));
+                    break;
+                }
+            };
+            buf.extend_from_slice(&chunk);
             // 按行解析 SSE
             while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
                 let line: Vec<u8> = buf.drain(..=pos).collect();

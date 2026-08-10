@@ -30,6 +30,12 @@ pub fn action_for_id(id: &str) -> Option<TrayAction> {
     }
 }
 
+/// 窗口被非托盘路径隐藏(Esc / 关闭按钮)时同步托盘可见状态。
+/// 若不更新,托盘"显示/隐藏"会从 stale 的 visible 取反,表现为"点了没反应"。
+pub fn mark_hidden(state: &mut TrayState) {
+    state.visible = false;
+}
+
 /// 事件去抖(纯函数,可测试): 同动作在 debounce 内重复到达则忽略。
 /// 复现: Windows 上一次菜单点击会产生 2 个 MenuEvent,导致动作双触发。
 pub fn should_accept_action(
@@ -315,6 +321,18 @@ mod tests {
             t0 + Duration::from_millis(60),
             debounce
         ));
+    }
+
+    /// 窗口经非托盘路径(Esc/关闭按钮)隐藏后,托盘状态必须同步为不可见,
+    /// 否则托盘"显示/隐藏"从 stale true 取反成 false,窗口无法恢复。
+    #[test]
+    fn mark_hidden_syncs_tray_state() {
+        let mut s = TrayState { visible: true, ..Default::default() };
+        mark_hidden(&mut s);
+        assert!(!s.visible, "隐藏后托盘状态应为不可见");
+        // 托盘 toggle 再从 false 取反 → 显示,窗口可恢复
+        s.visible = !s.visible;
+        assert!(s.visible, "托盘 toggle 应能恢复显示");
     }
 
     /// 开机自启注册表往返: 写入 → 读回 true → 删除 → 读回 false。

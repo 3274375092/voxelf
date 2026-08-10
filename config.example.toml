@@ -45,7 +45,3 @@ vad_min_speech = 0.25
 vad_max_speech = 20.0
 # 段弹出后追加的尾部音频时长(秒),补偿渐弱尾音被 VAD 截断
 vad_tail_pad = 0.6
-
-[ui]
-window_width = 960
-window_height = 600

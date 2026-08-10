@@ -37,6 +37,24 @@ pub fn next_phase(ev: &crate::asr::AsrEvent, cur: Phase) -> Option<Phase> {
     }
 }
 
+/// Listening 假触发判定(纯函数): 无 ASR 中间结果、麦克风安静、
+/// 且距最近一次语音活动超过 timeout → 判定为误触发,应回 Idle。
+/// 背景: 麦克风回调按电平把 Idle 直接切到 Listening(开口即有反馈),
+/// 但噪音/误唤醒时 VAD 不会确认,也不会有任何 ASR 事件,旧代码会永远卡在聆听。
+pub fn listening_false_trigger(
+    phase: Phase,
+    has_partial: bool,
+    mic_level: f32,
+    quiet_for: Duration,
+    timeout: Duration,
+) -> bool {
+    phase == Phase::Listening && !has_partial && mic_level < 0.05 && quiet_for >= timeout
+}
+
+/// 误触发回 Idle 的静默超时(秒): 必须长于 VAD 段收尾静音(vad_min_silence,
+/// 默认 0.5s),避免与真实语音的 Final 事件竞争。
+const LISTEN_FALSE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// 核心闭环: ASR 事件 -> 大脑 -> TTS -> 播放 -> 状态机。
 pub async fn brain_loop(
     cfg: Config,
@@ -63,10 +81,17 @@ pub async fn brain_loop(
         }
     };
 
+    // 最近一次语音活动时刻(用于误触发回 Idle: VAD 未确认的噪音不会刷新它)
+    let mut last_voice_activity = Instant::now();
+
     loop {
         tokio::select! {
             ev = rx.recv_async() => {
-                let Ok(ev) = ev else { break };
+                let Ok(ev) = ev else {
+                    tracing::warn!("ASR 事件通道已关闭(ASR 线程退出),对话循环结束");
+                    break;
+                };
+                last_voice_activity = Instant::now();
                 match ev {
                     crate::asr::AsrEvent::SpeechStarted => {
                         if let Ok(mut s) = state.lock()
@@ -125,7 +150,13 @@ pub async fn brain_loop(
                         .await;
 
                         if !played_any {
-                            set_phase_error(&state, "语音合成失败".into());
+                            // 区分"大脑没给出可朗读内容"与"TTS 真的失败"
+                            let msg = if reply.is_empty() {
+                                "未收到可朗读的回复".to_string()
+                            } else {
+                                "语音合成失败".to_string()
+                            };
+                            set_phase_error(&state, msg);
                             continue;
                         }
                         tracing::info!(
@@ -149,6 +180,17 @@ pub async fn brain_loop(
                     }
                     // 待机且无声音时清掉残留的中间结果
                     if s.phase == Phase::Idle && s.mic_level < 0.05 && !s.asr_partial.is_empty() {
+                        s.asr_partial.clear();
+                    }
+                    // 误触发(噪音/误唤醒,VAD 未确认)超时回 Idle,避免永远卡在聆听
+                    if listening_false_trigger(
+                        s.phase,
+                        s.asr_partial.is_empty(),
+                        s.mic_level,
+                        last_voice_activity.elapsed(),
+                        LISTEN_FALSE_TIMEOUT,
+                    ) {
+                        s.phase = Phase::Idle;
                         s.asr_partial.clear();
                     }
                 }
@@ -227,10 +269,18 @@ where
                         s.status = format!("正在{tool}...");
                     }
                 }
-                Ok(BrainEvent::Done(_)) => {
+                Ok(BrainEvent::Done(d)) => {
                     if !sentence_buf.trim().is_empty() {
                         pending += 1;
                         let _ = tts_req_tx.send(std::mem::take(&mut sentence_buf));
+                    } else if reply.is_empty() && !d.trim().is_empty() {
+                        // 纯工具轮(agent 只调用工具、正文为空): 朗读 Done 摘要,
+                        // 否则会"没出声 + 报语音合成失败"。DeepSeek 的 Done 文本
+                        // 已通过 Delta 全文流式到达,reply 非空,不会走到这里。
+                        let d = d.trim();
+                        pending += 1;
+                        reply.push_str(d);
+                        let _ = tts_req_tx.send(d.to_string());
                     }
                     brain_done = true;
                     brain_closed = true;
@@ -295,6 +345,10 @@ where
         }
     }
     tracing::info!("LATENCY 管道结束 played={played_any} pending={pending} aborted={aborted}");
+    // 清掉 Working 残留的"正在xxx..."(成功/中止都走这里,进入下轮前恢复)
+    if let Ok(mut s) = state.lock() {
+        s.status.clear();
+    }
     (reply, played_any, first_audio)
 }
 
@@ -353,6 +407,7 @@ mod tests {
     use crate::state::{Phase, SharedState, UiState};
     use crate::tts;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     /// 状态机测试: 事件 → 状态转换必须与动画匹配。
     #[test]
@@ -389,6 +444,23 @@ mod tests {
         // busy: 上一句还在处理,新 Final 被忽略
         assert_eq!(next_phase(&AsrEvent::Final("你好".into()), Phase::Speaking), None);
         assert_eq!(next_phase(&AsrEvent::Final("你好".into()), Phase::Thinking), None);
+    }
+
+    /// 误触发判定: 噪音把 Idle 切到 Listening 但 VAD 从未确认(无 partial、无事件),
+    /// 麦克风安静超过 2s 后必须回 Idle(否则永远卡在"我在听呢...")。
+    #[test]
+    fn false_trigger_returns_to_idle() {
+        use super::listening_false_trigger;
+        let t = Duration::from_secs(2);
+        // 噪音误触发: Listening + 无 partial + 安静 + 超时 → 判定为误触发
+        assert!(listening_false_trigger(Phase::Listening, false, 0.0, t, t));
+        // 未超时 / 麦克风还有声 / 有 ASR 中间结果(真实语音) → 不判定
+        assert!(!listening_false_trigger(Phase::Listening, false, 0.0, Duration::from_secs(1), t));
+        assert!(!listening_false_trigger(Phase::Listening, false, 0.2, t, t));
+        assert!(!listening_false_trigger(Phase::Listening, true, 0.0, t, t), "有 partial 说明 VAD 已确认");
+        // 非 Listening 状态不受影响
+        assert!(!listening_false_trigger(Phase::Idle, false, 0.0, t, t));
+        assert!(!listening_false_trigger(Phase::Speaking, false, 0.0, t, t));
     }
 
     /// 完整对话循环: Idle → 开口 → Listening → Final → Thinking → 播放 Speaking → Idle
@@ -575,6 +647,55 @@ mod tests {
         let st = state.lock().unwrap();
         assert_eq!(st.phase, Phase::Error);
         assert_eq!(st.error.as_deref(), Some("API 超时"));
+    }
+
+    /// 纯工具轮(agent 只调工具、无正文 Delta): Done 摘要必须被朗读,
+    /// 否则"任务完成"这类回复会没出声还报语音合成失败。
+    #[tokio::test]
+    async fn stream_pipeline_speaks_done_summary_when_no_deltas() {
+        let state: SharedState = Arc::new(Mutex::new(UiState::default()));
+        let (ev_tx, ev_rx) = flume::unbounded::<BrainEvent>();
+        tokio::spawn(async move {
+            let _ = ev_tx.send(BrainEvent::Working("bash".into()));
+            let _ = ev_tx.send(BrainEvent::Done("任务完成".into()));
+        });
+        let queued: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+        let q2 = queued.clone();
+        let (reply, played, _) = run_stream_pipeline(
+            |_s: &str| Some((vec![0f32; 16000], 16000u32)),
+            move |samples, _rate| {
+                q2.lock().unwrap().push(samples.len() as u32);
+            },
+            ev_rx,
+            &state,
+            std::time::Instant::now(),
+        )
+        .await;
+        assert!(played, "纯工具轮也应出声(朗读 Done 摘要)");
+        assert_eq!(reply, "任务完成");
+        assert!(!queued.lock().unwrap().is_empty(), "应有音频入队");
+        let st = state.lock().unwrap();
+        assert_eq!(st.status, "", "Working 残留状态应已清空");
+    }
+
+    /// 大脑 Done 但无任何内容(空回复): 不应挂死,也不应入队音频。
+    #[tokio::test]
+    async fn stream_pipeline_empty_done_terminates_quietly() {
+        let state: SharedState = Arc::new(Mutex::new(UiState::default()));
+        let (ev_tx, ev_rx) = flume::unbounded::<BrainEvent>();
+        tokio::spawn(async move {
+            let _ = ev_tx.send(BrainEvent::Done("".into()));
+        });
+        let (reply, played, _) = run_stream_pipeline(
+            |_s: &str| Some((vec![0f32; 16000], 16000u32)),
+            |_samples, _rate| {},
+            ev_rx,
+            &state,
+            std::time::Instant::now(),
+        )
+        .await;
+        assert!(!played, "空回复不应入队音频");
+        assert!(reply.is_empty());
     }
 
     /// 端到端真实链路(需模型 + 音频设备): 缺任一即跳过。

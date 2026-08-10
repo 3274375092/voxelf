@@ -20,7 +20,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 use brain::{BrainEvent, BrainKind};
-use state::{Phase, SharedState, UiState};
+use state::{SharedState, UiState};
 
 #[derive(Parser)]
 #[command(name = "voxelf", version, about = "语音交互像素伙伴: 麦克风 -> DeepSeek -> 语音回复,像素小人动画呈现")]
@@ -189,11 +189,7 @@ fn rotate_log_file() -> Option<std::fs::File> {
 /// UI 主程序: 麦克风 + ASR + 大脑 + TTS 全部在后台线程跑,
 /// eframe 桌宠窗口在主线程渲染。
 fn run_app(cfg: Config) -> Result<()> {
-    let state: SharedState = Arc::new(Mutex::new(UiState {
-        phase: Phase::Idle,
-        status: "启动中...".into(),
-        ..Default::default()
-    }));
+    let state: SharedState = Arc::new(Mutex::new(UiState::default()));
 
     // 检查模型是否齐全
     let models_ok = check_models(&cfg);

@@ -129,6 +129,10 @@ enum BrainEvent { Delta(String), Done(String), Err(String), Working(String) }
 
 - **首次编译慢**:sherpa-onnx 静态链接 onnxruntime,首次 build 10–20 分钟,属正常;模型需下载(~100–400MB)。
 - **Windows 音频**:回声/啸叫,开发期用耳机测试;回声消除留后续(VoIP 级方案复杂,不必 MVP 做)。
+- **误触发回 Idle**: 麦克风电平把 Idle 切到 Listening 后,若 VAD 未确认(噪音/误唤醒)、无 ASR 中间结果且麦克风安静 ≥2s,自动回 Idle,不会永远卡在"我在听呢..."。
+- **链路超时**: DeepSeek 连接 10s 超时、流式数据块 60s 超时;agent 已有 `timeout_secs` 兜底。任一路径挂死都不会让小人永远卡在思考。
+- **纯工具轮播报**: agent 只调工具、正文为空时,朗读 Done 摘要(如"任务完成"),不再"没出声 + 报语音合成失败"。
+- **托盘可见性同步**: 窗口初始 visible=true;Esc/关闭按钮隐藏会同步托盘状态,托盘"显示/隐藏"始终有效。
 - **打断功能**:实现中等复杂(播放时继续跑 VAD,检测到语音就停 TTS),放 M5。
 - **网络依赖**:DeepSeek API 需 key 与网络;本地 ASR/TTS 不受影响,断网时小人可播兜底话术。
 - **模型文件体积**:Kokoro 中文音色 ~100–300MB;可后续换更小的模型或改云端 CosyVoice。

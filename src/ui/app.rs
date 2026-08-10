@@ -43,6 +43,14 @@ impl VoxApp {
         }
     }
 
+    /// 同步托盘可见状态: 非托盘路径隐藏窗口(Esc/关闭按钮)时调用,
+    /// 防止托盘 toggle 从 stale visible 取反(点了没反应)。
+    fn mark_hidden_in_tray(&self) {
+        if let Some(ts) = &self.tray_state {
+            crate::tray::mark_hidden(&mut ts.lock().expect("tray state 锁"));
+        }
+    }
+
     /// 读托盘共享状态快照(无托盘时返回默认)
     fn tray_snapshot(&self) -> TrayState {
         self.tray_state
@@ -163,7 +171,14 @@ impl VoxApp {
             return st.reply_text.clone();
         }
         match st.phase {
-            Phase::Idle => "对着麦克风跟我说点什么吧~".into(),
+            Phase::Idle => {
+                // 启动提示(模型缺失/麦克风不可用)优先于默认话术
+                if !st.status.is_empty() {
+                    st.status.clone()
+                } else {
+                    "对着麦克风跟我说点什么吧~".into()
+                }
+            }
             Phase::Listening => {
                 if st.asr_partial.is_empty() { "我在听呢..." } else { &st.asr_partial }
             }
@@ -434,6 +449,7 @@ impl eframe::App for VoxApp {
             if quitting {
                 return; // 放行,让 eframe 正常退出
             }
+            self.mark_hidden_in_tray();
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
@@ -442,9 +458,10 @@ impl eframe::App for VoxApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // 可见帧也维持持续重绘(自维持动画/事件帧循环,否则休眠后要等鼠标事件)
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
-        // Esc → 隐藏到托盘
+        // Esc → 隐藏到托盘(同步托盘状态,托盘 toggle 才能恢复显示)
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.mark_hidden_in_tray();
             return;
         }
         self.draw_pet(ui);
@@ -477,7 +494,10 @@ pub fn run_ui(state: SharedState) -> eframe::Result<()> {
     if tray.is_none() {
         tracing::warn!("托盘初始化失败,继续无托盘运行");
     }
-    let tray_state: SharedTrayState = std::sync::Arc::new(std::sync::Mutex::new(TrayState::default()));
+    let tray_state: SharedTrayState = std::sync::Arc::new(std::sync::Mutex::new(TrayState {
+        visible: true, // 窗口初始可见,与真实状态一致(否则首次托盘 toggle 取反为错值)
+        ..Default::default()
+    }));
     let viewport = egui::ViewportBuilder::default()
         .with_title("voxelf - 语音像素伙伴")
         .with_inner_size([PET_W, PET_H])
@@ -589,6 +609,23 @@ mod tests {
         assert_eq!(out.chars().count(), 63, "截断后含省略号共 63 字");
         assert!(out.ends_with('…'), "应以省略号结尾: {out}");
         assert_eq!(out.chars().filter(|&c| c == '字').count(), 62);
+    }
+
+    /// 启动提示(模型缺失/麦克风不可用)必须在待机字幕中可见,
+    /// 且不覆盖聆听/思考等状态文本(只占 Idle 的提示位)。
+    #[test]
+    fn idle_status_notice_is_shown() {
+        use crate::state::UiState;
+        use std::sync::{Arc, Mutex};
+        let app = VoxApp::new(Arc::new(Mutex::new(UiState::default())), None, None);
+        let st = UiState { phase: Phase::Idle, status: "模型未下载".into(), ..Default::default() };
+        assert_eq!(app.status_text(&st), "模型未下载");
+        // 无提示时显示默认话术
+        let st = UiState { phase: Phase::Idle, ..Default::default() };
+        assert!(app.status_text(&st).contains("麦克风"));
+        // 聆听/思考状态不被提示覆盖
+        let st = UiState { phase: Phase::Thinking, status: "模型未下载".into(), ..Default::default() };
+        assert_eq!(app.status_text(&st), "嗯...让我想想~");
     }
 
     #[test]

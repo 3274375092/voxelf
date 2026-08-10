@@ -8,7 +8,6 @@ pub struct Config {
     pub deepseek: DeepSeekCfg,
     pub brain: BrainCfg,
     pub models: ModelCfg,
-    pub ui: UiCfg,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -67,13 +66,6 @@ pub struct ModelCfg {
     pub vad_tail_pad: f32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
-pub struct UiCfg {
-    pub window_width: i32,
-    pub window_height: i32,
-}
-
 impl Default for DeepSeekCfg {
     fn default() -> Self {
         Self {
@@ -118,11 +110,6 @@ impl Default for ModelCfg {
             vad_max_speech: 20.0,
             vad_tail_pad: 0.6,
         }
-    }
-}
-impl Default for UiCfg {
-    fn default() -> Self {
-        Self { window_width: 960, window_height: 600 }
     }
 }
 impl Config {
