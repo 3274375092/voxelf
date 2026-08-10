@@ -1,7 +1,8 @@
-// 二次元美少女 v5: 64x64 高精度版
+// 二次元美少女 v6: 虹夏(孤独摇滚) 64x64
+// 特征: 金发 + 左侧单马尾 + 呆毛 + 红瞳 + 红领结 + 水手服
 // 字符: . 透明 | O 轮廓 | P 发色 | p 发高光 | q 发阴影 | S 皮肤 | s 肤阴影
 //       E 眼睛 | e 瞳孔 | H 高光 | C 腮红 | M 嘴 | m 嘴内 | B 水手服 | b 衣阴影
-//       W 白 | w 白阴影 | D 裙 | d 裙阴影 | F 蝴蝶结 | f 蝴蝶结阴影
+//       W 白 | w 白阴影 | D 裙 | d 裙阴影 | F 蝴蝶结/领结 | f 蝴蝶结阴影
 function row(segments) {
   const cells = new Array(64).fill('.');
   for (const [s, e, c] of segments) {
@@ -16,17 +17,14 @@ const seg = (s, e, c) => [s, e, c];
 // 部件: 每个返回 [行号, 区间数组]
 const parts = [];
 
-// ---- 双马尾(左右): r2..r30, 轮廓 8-15/48-55, 内部 10-13/50-53, 高光 10-11, 阴影 12-13 ----
+// ---- 左单马尾: r2..r32, 轮廓 8-15, 内部 10-13, 高光 10-11, 阴影 12-13 ----
 for (let r = 2; r <= 30; r++) {
   const l = [seg(8, 15, 'O'), seg(10, 13, 'P'), seg(10, 11, 'p'), seg(12, 13, 'q')];
-  const rr = [seg(48, 55, 'O'), seg(50, 53, 'P'), seg(50, 51, 'p'), seg(52, 53, 'q')];
-  parts.push([r, [...l, ...rr]]);
+  parts.push([r, l]);
 }
 // 马尾尾端收尖
 parts.push([31, [seg(9, 14, 'O'), seg(10, 13, 'P'), seg(10, 11, 'p'), seg(12, 13, 'q')]]);
 parts.push([32, [seg(10, 13, 'O'), seg(11, 12, 'P')]]);
-parts.push([31, [seg(49, 54, 'O'), seg(50, 53, 'P'), seg(50, 51, 'p'), seg(52, 53, 'q')]]);
-parts.push([32, [seg(50, 53, 'O'), seg(51, 52, 'P')]]);
 
 // ---- 蝴蝶结: r2..r6, 列 27-40 ----
 parts.push([2, [seg(27, 40, 'O'), seg(28, 31, 'F'), seg(33, 36, 'F'), seg(29, 30, 'f'), seg(34, 35, 'f'), seg(32, 33, 'O')]]);
@@ -35,7 +33,10 @@ parts.push([4, [seg(27, 40, 'O'), seg(28, 31, 'F'), seg(33, 36, 'F'), seg(29, 30
 parts.push([5, [seg(28, 39, 'O'), seg(29, 32, 'F'), seg(34, 37, 'F'), seg(33, 34, 'O')]]);
 parts.push([6, [seg(30, 37, 'O'), seg(31, 34, 'F'), seg(32, 33, 'O')]]);
 
-// ---- 头顶+刘海: r6..r12 ----
+// ---- 呆毛: r4-5 头顶中央(蝴蝶结后方) ----
+parts.push([4, [seg(31, 32, 'P')]]);
+parts.push([5, [seg(31, 32, 'O'), seg(31, 32, 'P')]]);
+// 蝴蝶结上方右侧留空(单马尾)
 parts.push([6, [seg(16, 47, 'O'), seg(18, 45, 'P')]]);
 for (let r = 7; r <= 8; r++) {
   parts.push([r, [seg(16, 47, 'O'), seg(18, 45, 'P'), seg(19, 22, 'p'), seg(40, 43, 'p')]]);
@@ -77,9 +78,9 @@ parts.push([33, [seg(23, 40, 'O'), seg(24, 39, 'W'), seg(24, 24, 'w'), seg(39, 3
 for (let r = 34; r <= 45; r++) {
   parts.push([r, [seg(21, 42, 'O'), seg(22, 41, 'B'), seg(22, 22, 'b'), seg(41, 41, 'b')]]);
 }
-// 领巾 r35-38
+// ---- 领结(红): r35-38 领巾改为红领结 ----
 for (let r = 35; r <= 38; r++) {
-  parts.push([r, [seg(28, 35, 'W'), seg(28, 28, 'w'), seg(35, 35, 'w')]]);
+  parts.push([r, [seg(28, 35, 'F'), seg(28, 29, 'f'), seg(34, 35, 'f')]]);
 }
 // 衣摆阴影 r44-45
 parts.push([44, [seg(23, 40, 'b')]]);
@@ -120,19 +121,26 @@ for (let r = 0; r < 64; r++) {
   composed.push(cells.join(''));
 }
 
+// 合成后整体右移 8 列,让人物在 64 画布中居中(左侧单马尾会占掉左侧空间)
+const shifted = composed.map((r) => {
+  const cells = new Array(64).fill('.');
+  for (let x = 0; x < 56; x++) cells[x + 8] = r[x];
+  return cells.join('');
+});
+
 const palette = {
   O: '#5a3a2a',
-  P: '#f5a0b8', p: '#ffd8e0', q: '#d07898',
+  P: '#ffd23e', p: '#ffe88a', q: '#d8a020', // 金发
   S: '#ffe8dc', s: '#e8c8b8',
-  E: '#5a2a4a', e: '#2a1030', H: '#ffffff',
+  E: '#c03048', e: '#7a1020', H: '#ffffff', // 红瞳
   C: '#ff9a8a', M: '#c05a5a', m: '#8a3a3a',
   B: '#5a8ae0', b: '#3a5ab8',
   W: '#ffffff', w: '#c8c8d8',
   D: '#3a5ab8', d: '#2a3a8a',
-  F: '#ff5a7a', f: '#c83a5a',
+  F: '#e84050', f: '#a82838', // 红蝴蝶结/领结
 };
 
-module.exports = { rows: composed, palette };
+module.exports = { rows: shifted, palette };
 if (require.main === module) {
-  composed.forEach((r, i) => console.log(i + ' ' + r));
+  shifted.forEach((r, i) => console.log(i + ' ' + r));
 }
