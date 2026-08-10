@@ -18,6 +18,17 @@ pub struct VoxApp {
     t: f64,
 }
 
+/// 字幕文本截断: 超过 max_chars 字符截断并加省略号(纯函数,可测试)。
+fn subtitle_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() > max_chars {
+        let mut s: String = text.chars().take(max_chars - 1).collect();
+        s.push('…');
+        s
+    } else {
+        text.to_string()
+    }
+}
+
 impl VoxApp {
     pub fn new(state: SharedState) -> Self {
         Self { state, t: 0.0 }
@@ -285,23 +296,36 @@ impl VoxApp {
             );
         }
 
-        // ---- 字幕(屏幕内底部) ----
+        // ---- 字幕(屏幕内底部,自动换行 + 裁剪 + 自适应高度) ----
         let text = self.status_text(&st);
-        let sub = painter.layout_no_wrap(
-            text,
+        let wrap_w = g(24.0);
+        // 截断到最多 3 行(~21 字/行),超出加省略号
+        let max_chars = 63;
+        let display = subtitle_text(&text, max_chars);
+        let sub_color = egui::Color32::from_rgb(0xcf, 0xd4, 0xf0);
+        let sub = painter.layout(
+            display,
             egui::FontId::proportional(13.0),
-            egui::Color32::from_rgb(0xcf, 0xd4, 0xf0),
+            sub_color,
+            wrap_w,
         );
-        let sub_w = sub.size().x.min(g(24.0));
+        // 字幕条高度自适应(1~3 行)
+        let bar_h = (sub.size().y + 10.0).clamp(16.0, g(4.0));
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(g(3.0), g(19.8)),
+            egui::pos2(g(29.0), g(19.8) + bar_h),
+        );
         painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(g(3.0), g(22.0)), egui::pos2(g(29.0), g(23.5))),
+            bar,
             egui::CornerRadius::same(3),
             egui::Color32::from_rgba_unmultiplied(0, 0, 0, 90),
         );
-        painter.galley(
-            egui::pos2(screen_in.center().x - sub_w / 2.0, g(22.3)),
+        // 裁剪到条内,超长也不溢出界面
+        let clipped = painter.with_clip_rect(bar);
+        clipped.galley(
+            egui::pos2(bar.center().x - sub.size().x / 2.0, bar.min.y + 5.0),
             sub,
-            egui::Color32::from_rgb(0xcf, 0xd4, 0xf0),
+            sub_color,
         );
 
         // ---- 底部控制条(格 25..31): 频道 + 电源灯 + 品牌 + 旋钮 ----
@@ -416,8 +440,24 @@ pub fn run_ui(state: SharedState) -> eframe::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::subtitle_text;
     use super::VoxApp;
     use crate::state::Phase;
+
+    /// 字幕截断: 短文本原样,长文本截断加省略号,边界不截。
+    #[test]
+    fn subtitle_truncates_long_text() {
+        assert_eq!(subtitle_text("你好", 63), "你好");
+        // 63 字符整: 不截断
+        let exact: String = "字".repeat(63);
+        assert_eq!(subtitle_text(&exact, 63).chars().count(), 63, "恰好 63 字不应截断");
+        // 64 字符: 截断为 62 字 + 省略号 = 63
+        let long: String = "字".repeat(64);
+        let out = subtitle_text(&long, 63);
+        assert_eq!(out.chars().count(), 63, "截断后含省略号共 63 字");
+        assert!(out.ends_with('…'), "应以省略号结尾: {out}");
+        assert_eq!(out.chars().filter(|&c| c == '字').count(), 62);
+    }
 
     #[test]
     fn all_phases_have_colors_and_bob() {
