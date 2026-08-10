@@ -19,9 +19,12 @@ workdir = "."
 [models]
 asr_dir = "assets/models/asr-zh"
 vad_model = "assets/models/vad/silero_vad.onnx"
-tts_dir = "assets/models/kokoro"
-tts_model_file = "model.int8.onnx"
-tts_voice = "xiaoxiao"   # xiaobei | xiaoni | xiaoxiao | xiaoyi
+# vits(默认,快): 目录 assets/models/vits-zh, voice 为 speaker id 数字
+# kokoro(音质好): 目录 assets/models/kokoro, voice 为 xiaobei/xiaoni/xiaoxiao/xiaoyi
+tts_dir = "assets/models/vits-zh"
+tts_model_file = "model.onnx"
+tts_voice = "0"
+tts_kind = "vits"
 asr_threads = 2
 tts_threads = 4
 vad_threshold = 0.3

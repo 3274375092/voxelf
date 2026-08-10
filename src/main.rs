@@ -200,16 +200,22 @@ fn run_app(cfg: Config) -> Result<()> {
 fn check_models(cfg: &Config) -> bool {
     let dir = cfg.models.asr_dir.as_os_str().to_string_lossy();
     let tts_dir = cfg.models.tts_dir.as_os_str().to_string_lossy();
-    [
+    let mut checks = vec![
         format!("{dir}/encoder.int8.onnx"),
         format!("{dir}/decoder.onnx"),
         format!("{dir}/joiner.int8.onnx"),
         cfg.models.vad_model.as_os_str().to_string_lossy().into_owned(),
-        format!("{tts_dir}/{}", cfg.models.tts_model_file),
-        format!("{tts_dir}/voices.bin"),
-    ]
-    .iter()
-    .all(|p| Path::new(p).exists())
+    ];
+    // TTS 按引擎检查不同的文件
+    if cfg.models.tts_kind == "vits" {
+        checks.push(format!("{tts_dir}/model.onnx"));
+        checks.push(format!("{tts_dir}/tokens.txt"));
+        checks.push(format!("{tts_dir}/lexicon.txt"));
+    } else {
+        checks.push(format!("{tts_dir}/{}", cfg.models.tts_model_file));
+        checks.push(format!("{tts_dir}/voices.bin"));
+    }
+    checks.iter().all(|p| Path::new(p).exists())
 }
 
 fn set_status(state: &SharedState, msg: String) {
