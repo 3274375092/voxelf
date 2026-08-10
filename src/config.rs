@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
     pub deepseek: DeepSeekCfg,
@@ -125,27 +125,16 @@ impl Default for UiCfg {
         Self { window_width: 960, window_height: 600 }
     }
 }
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            deepseek: DeepSeekCfg::default(),
-            brain: BrainCfg::default(),
-            models: ModelCfg::default(),
-            ui: UiCfg::default(),
-        }
-    }
-}
-
 impl Config {
     pub fn load() -> Result<Self> {
         let mut cfg = match std::fs::read_to_string("config.toml") {
             Ok(text) => toml::from_str(&text).context("解析 config.toml 失败")?,
             Err(_) => Config::default(),
         };
-        if cfg.deepseek.api_key.trim().is_empty() {
-            if let Ok(key) = std::env::var("DEEPSEEK_API_KEY") {
-                cfg.deepseek.api_key = key;
-            }
+        if cfg.deepseek.api_key.trim().is_empty()
+            && let Ok(key) = std::env::var("DEEPSEEK_API_KEY")
+        {
+            cfg.deepseek.api_key = key;
         }
         Ok(cfg)
     }

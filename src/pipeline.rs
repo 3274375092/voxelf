@@ -69,10 +69,10 @@ pub async fn brain_loop(
                 let Ok(ev) = ev else { break };
                 match ev {
                     crate::asr::AsrEvent::SpeechStarted => {
-                        if let Ok(mut s) = state.lock() {
-                            if let Some(p) = next_phase(&ev, s.phase) {
-                                s.phase = p;
-                            }
+                        if let Ok(mut s) = state.lock()
+                            && let Some(p) = next_phase(&ev, s.phase)
+                        {
+                            s.phase = p;
                         }
                     }
                     crate::asr::AsrEvent::Partial(ref text) => {

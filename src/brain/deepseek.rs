@@ -80,8 +80,7 @@ impl DeepSeekBrain {
                 }
             }
             // 按行解析 SSE
-            loop {
-                let Some(pos) = buf.iter().position(|&b| b == b'\n') else { break };
+            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
                 let line: Vec<u8> = buf.drain(..=pos).collect();
                 let line = String::from_utf8_lossy(&line).trim().to_string();
                 let Some(data) = line.strip_prefix("data:") else { continue };
@@ -89,16 +88,15 @@ impl DeepSeekBrain {
                 if data == "[DONE]" {
                     break;
                 }
-                if let Ok(v) = serde_json::from_str::<Value>(data) {
-                    if let Some(delta) = v["choices"][0]["delta"]["content"].as_str() {
-                        if !delta.is_empty() {
-                            if first_token_at.is_none() {
-                                first_token_at = Some(std::time::Instant::now());
-                            }
-                            full.push_str(delta);
-                            send(BrainEvent::Delta(delta.to_string()));
-                        }
+                if let Ok(v) = serde_json::from_str::<Value>(data)
+                    && let Some(delta) = v["choices"][0]["delta"]["content"].as_str()
+                    && !delta.is_empty()
+                {
+                    if first_token_at.is_none() {
+                        first_token_at = Some(std::time::Instant::now());
                     }
+                    full.push_str(delta);
+                    send(BrainEvent::Delta(delta.to_string()));
                 }
             }
         }

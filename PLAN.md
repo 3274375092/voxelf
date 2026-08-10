@@ -84,7 +84,8 @@ voxelf/
     ├── audio/
     │   ├── input.rs       # cpal 采集 + 电平计算
     │   └── output.rs      # rodio 播放
-    ├── asr.rs             # sherpa-onnx 流式识别 + VAD + 定位/延迟诊断命令
+    ├── asr.rs             # sherpa-onnx 流式识别 + VAD
+    ├── diag.rs            # ASR 定位/延迟诊断 CLI 工具(asr-diag / latency)
     ├── tts.rs             # sherpa-onnx vits/kokoro 合成
     ├── brain/
     │   ├── mod.rs         # BrainEvent 事件流 + BrainKind 分发(enum,非 trait)

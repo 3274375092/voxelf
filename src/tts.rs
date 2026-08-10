@@ -22,20 +22,26 @@ impl Tts {
 
     fn new_kokoro(cfg: &ModelCfg) -> Result<Self> {
         let dir = cfg.tts_dir.as_os_str().to_string_lossy().into_owned();
-        let mut kokoro = OfflineTtsKokoroModelConfig::default();
-        kokoro.model = Some(format!("{dir}/{}", cfg.tts_model_file));
-        kokoro.voices = Some(format!("{dir}/voices.bin"));
-        kokoro.tokens = Some(format!("{dir}/tokens.txt"));
-        kokoro.data_dir = Some(format!("{dir}/espeak-ng-data"));
-        kokoro.dict_dir = Some(format!("{dir}/dict"));
-        kokoro.lexicon = Some(format!("{dir}/lexicon-zh.txt"));
+        let kokoro = OfflineTtsKokoroModelConfig {
+            model: Some(format!("{dir}/{}", cfg.tts_model_file)),
+            voices: Some(format!("{dir}/voices.bin")),
+            tokens: Some(format!("{dir}/tokens.txt")),
+            data_dir: Some(format!("{dir}/espeak-ng-data")),
+            dict_dir: Some(format!("{dir}/dict")),
+            lexicon: Some(format!("{dir}/lexicon-zh.txt")),
+            ..Default::default()
+        };
 
-        let mut model = OfflineTtsModelConfig::default();
-        model.kokoro = kokoro;
-        model.num_threads = cfg.tts_threads;
+        let model = OfflineTtsModelConfig {
+            kokoro,
+            num_threads: cfg.tts_threads,
+            ..Default::default()
+        };
 
-        let mut config = OfflineTtsConfig::default();
-        config.model = model;
+        let config = OfflineTtsConfig {
+            model,
+            ..Default::default()
+        };
 
         let engine = OfflineTts::create(&config).context("创建 TTS 引擎失败")?;
         let voice_id = match cfg.tts_voice.as_str() {
@@ -58,23 +64,28 @@ impl Tts {
 
     fn new_vits(cfg: &ModelCfg) -> Result<Self> {
         let dir = cfg.tts_dir.as_os_str().to_string_lossy().into_owned();
-        let mut vits = OfflineTtsVitsModelConfig::default();
-        vits.model = Some(format!("{dir}/{}", cfg.tts_model_file));
-        vits.tokens = Some(format!("{dir}/tokens.txt"));
-        vits.lexicon = Some(format!("{dir}/lexicon.txt"));
-        vits.dict_dir = Some(format!("{dir}/dict"));
+        let vits = OfflineTtsVitsModelConfig {
+            model: Some(format!("{dir}/{}", cfg.tts_model_file)),
+            tokens: Some(format!("{dir}/tokens.txt")),
+            lexicon: Some(format!("{dir}/lexicon.txt")),
+            dict_dir: Some(format!("{dir}/dict")),
+            ..Default::default()
+        };
 
-        let mut model = OfflineTtsModelConfig::default();
-        model.vits = vits;
-        model.num_threads = cfg.tts_threads;
-
-        let mut config = OfflineTtsConfig::default();
-        config.model = model;
+        let model = OfflineTtsModelConfig {
+            vits,
+            num_threads: cfg.tts_threads,
+            ..Default::default()
+        };
         // 中文文本规范化 FST(数字/日期/多音字);失败时降级为无 FST
         let fsts = format!(
             "{dir}/phone.fst,{dir}/date.fst,{dir}/number.fst,{dir}/new_heteronym.fst"
         );
-        config.rule_fsts = Some(fsts);
+        let config = OfflineTtsConfig {
+            model,
+            rule_fsts: Some(fsts),
+            ..Default::default()
+        };
 
         let engine = OfflineTts::create(&config).context("创建 VITS TTS 引擎失败")?;
         let voice_id: i32 = cfg

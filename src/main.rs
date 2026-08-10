@@ -2,6 +2,7 @@
 mod asr;
 mod brain;
 mod config;
+mod diag;
 mod pipeline;
 mod state;
 mod tray;
@@ -81,10 +82,10 @@ fn main() -> Result<()> {
             });
             Ok(())
         }
-        Cmd::AsrDiag { text } => asr::run_asr_diag(&cfg, &text),
+        Cmd::AsrDiag { text } => diag::run_asr_diag(&cfg, &text),
         Cmd::Latency { text } => {
             let text = text.unwrap_or_else(|| "今天天气很好我们去公园散步吧".to_string());
-            asr::run_latency_test(&cfg, &text)
+            diag::run_latency_test(&cfg, &text)
         }
         Cmd::Speak { text } => {
             let text = text.unwrap_or_else(|| {
@@ -210,10 +211,10 @@ fn run_app(cfg: Config) -> Result<()> {
     }
 
     // ASR 工作线程
-    if models_ok {
-        if let Err(e) = asr::spawn_asr_worker(cfg.models.clone(), asr_rx, ev_tx) {
-            tracing::error!("启动 ASR 失败: {e:#}");
-        }
+    if models_ok
+        && let Err(e) = asr::spawn_asr_worker(cfg.models.clone(), asr_rx, ev_tx)
+    {
+        tracing::error!("启动 ASR 失败: {e:#}");
     }
 
     // 大脑 + TTS + 播放循环(tokio runtime 线程)

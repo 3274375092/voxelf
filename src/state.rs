@@ -1,7 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Phase {
+    #[default]
     Idle,
     Listening,
     Thinking,
@@ -25,12 +26,6 @@ pub struct UiState {
     /// 状态提示(如加载失败信息)
     pub status: String,
     pub error: Option<String>,
-}
-
-impl Default for Phase {
-    fn default() -> Self {
-        Phase::Idle
-    }
 }
 
 pub type SharedState = Arc<Mutex<UiState>>;
