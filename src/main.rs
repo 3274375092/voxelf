@@ -199,7 +199,8 @@ async fn brain_loop(
     rx: flume::Receiver<asr::AsrEvent>,
     state: SharedState,
 ) {
-    let mut brain = BrainKind::from_config(&cfg);
+    // 大脑(共享: 流式请求在子任务里执行,避免阻塞事件循环;tokio 锁可在 await 间持有)
+    let brain = Arc::new(tokio::sync::Mutex::new(BrainKind::from_config(&cfg)));
 
     let tts = match tts::Tts::new(&cfg.models) {
         Ok(t) => Some(Arc::new(t)),
@@ -248,60 +249,115 @@ async fn brain_loop(
                         }
                         tracing::info!("识别: {text}");
 
-                        let events = brain.run(&text).await;
-                        let reply = match events.iter().find_map(|e| match e {
-                            BrainEvent::Done(r) => Some(r.clone()),
-                            _ => None,
-                        }) {
-                            Some(r) => r,
-                            None => {
-                                let err = events.iter().find_map(|e| match e {
-                                    BrainEvent::Err(m) => Some(m.clone()),
-                                    _ => None,
-                                }).unwrap_or_else(|| "无回复".into());
-                                tracing::error!("大脑错误: {err}");
-                                set_phase_error(&state, err);
-                                continue;
-                            }
-                        };
-                        tracing::info!("LATENCY 识别完成->大脑完成 {:.2}s", t0.elapsed().as_secs_f32());
-
-                        // TTS 分句流式: 逐句合成→入队播放。
-                        // 合成耗时 < 音频时长,所以第一句开播后,后续句子在播放中并行合成,几乎无缝。
+                        // ---- 大脑流式 → 按句 TTS 流式 ----
                         let (Some(tts), Some(player)) = (&tts, &player) else { continue };
-                        let sentences = split_sentences(&reply);
+
+                        // 大脑事件通道: Delta 实时到达,首字即触发第一句合成
+                        let (ev_tx, ev_rx) = flume::unbounded::<BrainEvent>();
+                        let brain2 = brain.clone();
+                        let text2 = text.clone();
+                        tokio::spawn(async move {
+                            let mut b = brain2.lock().await;
+                            b.run_streaming(&text2, ev_tx).await;
+                        });
+
+                        // TTS 单消费者工作线程(保序): 收句子 → 合成 → 回传音频
+                        let (tts_req_tx, tts_req_rx) = flume::unbounded::<String>();
+                        let (tts_done_tx, tts_done_rx) =
+                            flume::unbounded::<Option<(Vec<f32>, u32)>>();
+                        let tts_worker = tts.clone();
+                        tokio::spawn(async move {
+                            while let Ok(s) = tts_req_rx.recv_async().await {
+                                let tts = tts_worker.clone();
+                                let out = tokio::task::spawn_blocking(move || tts.synthesize(&s))
+                                    .await
+                                    .ok()
+                                    .flatten();
+                                let _ = tts_done_tx.send(out);
+                            }
+                        });
+
+                        let mut reply = String::new();
+                        let mut sentence_buf = String::new();
+                        let mut pending = 0usize;
                         let mut played_any = false;
-                        for (i, sentence) in sentences.iter().enumerate() {
-                            let tts = tts.clone();
-                            let s = sentence.clone();
-                            let tts_result =
-                                tokio::task::spawn_blocking(move || tts.synthesize(&s)).await;
-                            let Ok(Some((mut samples, rate))) = tts_result else {
-                                tracing::warn!("句子 {i} 合成失败,跳过: {sentence}");
-                                continue;
-                            };
-                            if played_any {
-                                // 句间停顿 0.25s,节奏更自然
-                                let pause = vec![0f32; rate as usize / 4];
-                                samples.splice(0..0, pause);
+                        let mut brain_done = false;
+                        let mut aborted = false;
+
+                        while !aborted {
+                            tokio::select! {
+                                ev = ev_rx.recv_async() => match ev {
+                                    Ok(BrainEvent::Delta(d)) => {
+                                        reply.push_str(&d);
+                                        sentence_buf.push_str(&d);
+                                        // 气泡实时更新
+                                        if let Ok(mut s) = state.lock() {
+                                            s.reply_text = reply.clone();
+                                        }
+                                        while let Some(s) = take_sentence(&mut sentence_buf) {
+                                            pending += 1;
+                                            let _ = tts_req_tx.send(s);
+                                        }
+                                    }
+                                    Ok(BrainEvent::Done(_)) => {
+                                        if !sentence_buf.trim().is_empty() {
+                                            pending += 1;
+                                            let _ = tts_req_tx.send(std::mem::take(&mut sentence_buf));
+                                        }
+                                        brain_done = true;
+                                        if pending == 0 {
+                                            break;
+                                        }
+                                    }
+                                    Ok(BrainEvent::Err(e)) => {
+                                        tracing::error!("大脑错误: {e}");
+                                        if played_any {
+                                            brain_done = true;
+                                            if pending == 0 {
+                                                break;
+                                            }
+                                        } else {
+                                            set_phase_error(&state, e);
+                                            aborted = true;
+                                        }
+                                    }
+                                    Err(_) => break,
+                                },
+                                audio = tts_done_rx.recv_async() => {
+                                    if let Ok(Some((mut samples, rate))) = audio {
+                                        if played_any {
+                                            // 句间停顿 0.25s
+                                            let pause = vec![0f32; rate as usize / 4];
+                                            samples.splice(0..0, pause);
+                                        }
+                                        if !played_any {
+                                            tracing::info!(
+                                                "LATENCY 识别完成->首句开播 {:.2}s",
+                                                t0.elapsed().as_secs_f32()
+                                            );
+                                            if let Ok(mut s) = state.lock() {
+                                                s.phase = Phase::Speaking;
+                                            }
+                                        }
+                                        player.queue(samples, rate);
+                                        played_any = true;
+                                    }
+                                    pending = pending.saturating_sub(1);
+                                    if brain_done && pending == 0 {
+                                        break;
+                                    }
+                                }
                             }
-                            if !played_any {
-                                tracing::info!(
-                                    "LATENCY 识别完成->首句开播 {:.2}s",
-                                    t0.elapsed().as_secs_f32()
-                                );
-                            }
-                            player.queue(samples, rate);
-                            played_any = true;
                         }
-                        if !played_any {
+
+                        if !played_any && !aborted {
                             set_phase_error(&state, "语音合成失败".into());
                             continue;
                         }
                         tracing::info!(
-                            "LATENCY 全部 {} 句已入队 (总等待 {:.2}s)",
-                            sentences.len(),
-                            t0.elapsed().as_secs_f32()
+                            "LATENCY 全部句子已入队 (总等待 {:.2}s, 共 {} 字)",
+                            t0.elapsed().as_secs_f32(),
+                            reply.chars().count()
                         );
                         if let Ok(mut s) = state.lock() {
                             s.reply_text = reply;
@@ -347,6 +403,22 @@ fn split_sentences(text: &str) -> Vec<String> {
     out
 }
 
+/// 流式增量版: 从累积缓冲中取出一句完整的话(与 split_sentences 同规则)。
+fn take_sentence(buf: &mut String) -> Option<String> {
+    let mut chars = 0usize;
+    for (i, c) in buf.char_indices() {
+        chars += 1;
+        let hard_break = matches!(c, '。' | '！' | '？' | '…' | '!' | '?' | '.') && chars >= 2;
+        if hard_break || chars >= 40 {
+            let end = i + c.len_utf8();
+            let s = buf[..end].to_string();
+            buf.drain(..end);
+            return Some(s);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::split_sentences;
@@ -366,6 +438,21 @@ mod tests {
         let parts = split_sentences(&long);
         assert!(parts.iter().all(|p| p.chars().count() <= 40));
         assert_eq!(parts.iter().map(|p| p.chars().count()).sum::<usize>(), 50);
+    }
+
+    #[test]
+    fn take_sentence_incremental() {
+        use super::take_sentence;
+        let mut buf = String::new();
+        // 逐字喂入,模拟 LLM 流式
+        for c in "今天天气不错。明天会下雨,记得带伞!".chars() {
+            buf.push(c);
+            take_sentence(&mut buf); // 有完整句时取出
+        }
+        // 流结束: 冲掉剩余
+        let rest = take_sentence(&mut buf);
+        assert!(rest.is_none() || !rest.unwrap().trim().is_empty());
+        assert!(buf.is_empty(), "缓冲应被取空: {buf}");
     }
 }
 

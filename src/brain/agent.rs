@@ -15,8 +15,11 @@ impl AgentBrain {
         Self { cfg: cfg.clone() }
     }
 
-    pub async fn run(&mut self, text: &str) -> Vec<BrainEvent> {
-        let mut events = Vec::new();
+    pub async fn run_streaming(&mut self, text: &str, tx: flume::Sender<BrainEvent>) {
+        let send = |e: BrainEvent| {
+            let _ = tx.send(e);
+        };
+
         let mut child = match tokio::process::Command::new(&self.cfg.command)
             .arg("run")
             .arg(text)
@@ -28,10 +31,11 @@ impl AgentBrain {
         {
             Ok(c) => c,
             Err(e) => {
-                return vec![BrainEvent::Err(format!(
+                send(BrainEvent::Err(format!(
                     "启动 agent {} 失败: {e}",
                     self.cfg.command
-                ))]
+                )));
+                return;
             }
         };
 
@@ -45,16 +49,15 @@ impl AgentBrain {
             }
             out.push_str(&line);
             out.push(' ');
-            events.push(BrainEvent::Delta(line));
+            send(BrainEvent::Delta(line));
         }
         let _ = child.wait().await;
 
         let summary: String = out.trim().chars().take(160).collect();
-        events.push(BrainEvent::Done(if summary.is_empty() {
+        send(BrainEvent::Done(if summary.is_empty() {
             "任务完成".into()
         } else {
             summary
         }));
-        events
     }
 }

@@ -6,6 +6,7 @@ use super::BrainEvent;
 use crate::config::DeepSeekCfg;
 
 /// DeepSeek(OpenAI 兼容 API)流式聊天。保留最近几轮上下文。
+/// run_streaming 把增量事件实时推给调用方(首字一到即可开始合成语音)。
 pub struct DeepSeekBrain {
     client: Client,
     cfg: DeepSeekCfg,
@@ -17,9 +18,14 @@ impl DeepSeekBrain {
         Self { client: Client::new(), cfg: cfg.clone(), history: Vec::new() }
     }
 
-    pub async fn run(&mut self, text: &str) -> Vec<BrainEvent> {
+    pub async fn run_streaming(&mut self, text: &str, tx: flume::Sender<BrainEvent>) {
+        let send = |e: BrainEvent| {
+            let _ = tx.send(e);
+        };
+
         if self.cfg.api_key.trim().is_empty() {
-            return vec![BrainEvent::Err("未配置 DEEPSEEK_API_KEY(环境变量或 config.toml)".into())];
+            send(BrainEvent::Err("未配置 DEEPSEEK_API_KEY(环境变量或 config.toml)".into()));
+            return;
         }
 
         let mut messages: Vec<Value> = vec![json!({
@@ -46,16 +52,19 @@ impl DeepSeekBrain {
             .await
         {
             Ok(r) => r,
-            Err(e) => return vec![BrainEvent::Err(format!("请求 DeepSeek 失败: {e}"))],
+            Err(e) => {
+                send(BrainEvent::Err(format!("请求 DeepSeek 失败: {e}")));
+                return;
+            }
         };
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return vec![BrainEvent::Err(format!("DeepSeek API {status}: {body}"))];
+            send(BrainEvent::Err(format!("DeepSeek API {status}: {body}")));
+            return;
         }
 
-        let mut events = Vec::new();
         let mut full = String::new();
         let mut buf: Vec<u8> = Vec::new();
         let mut stream = resp.bytes_stream();
@@ -66,7 +75,7 @@ impl DeepSeekBrain {
             match chunk {
                 Ok(c) => buf.extend_from_slice(&c),
                 Err(e) => {
-                    events.push(BrainEvent::Err(format!("读取回复流失败: {e}")));
+                    send(BrainEvent::Err(format!("读取回复流失败: {e}")));
                     break;
                 }
             }
@@ -87,7 +96,7 @@ impl DeepSeekBrain {
                                 first_token_at = Some(std::time::Instant::now());
                             }
                             full.push_str(delta);
-                            events.push(BrainEvent::Delta(delta.to_string()));
+                            send(BrainEvent::Delta(delta.to_string()));
                         }
                     }
                 }
@@ -104,10 +113,7 @@ impl DeepSeekBrain {
 
         let reply = full.trim().to_string();
         if reply.is_empty() {
-            if events.is_empty() {
-                events.push(BrainEvent::Err("模型返回为空".into()));
-            }
-            return events;
+            return; // 错误事件已在上游推送
         }
 
         // 记录上下文
@@ -117,7 +123,6 @@ impl DeepSeekBrain {
             self.history.drain(..self.history.len() - 16);
         }
 
-        events.push(BrainEvent::Done(reply));
-        events
+        send(BrainEvent::Done(reply));
     }
 }
