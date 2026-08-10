@@ -9,12 +9,20 @@ model = "deepseek-chat"
 system_prompt = """你是一个住在像素世界里的可爱小精灵伙伴,名字叫 Vox。用简短、口语化的中文回复,每次不超过 3 句话。语气活泼、温暖、有点俏皮。回复是要被语音合成朗读出来的,不要使用列表、markdown 符号或表情符号。句子之间用句号或感叹号分隔,方便语音流式播放。"""
 
 [brain]
-# deepseek | agent(实验性,通过子进程调用 jcode/pi)
+# deepseek | agent(全走常驻 repl,无降级) | hybrid(默认: 有 jcode 全走 agent,没有自动降级 DeepSeek)
 kind = "deepseek"
 
 [brain.agent]
 command = "jcode"
 workdir = "."
+# 是否启用 agent(false = 即使装了 jcode 也不用)
+enabled = true
+# 传给 `jcode repl -p` 的 provider; 留空用 jcode 自动探测
+provider = "deepseek"
+# 工具白名单(逗号分隔 read,write,edit,bash,websearch,webfetch...); 空 = 内置 minimal 只读工具集
+tools = ""
+# 单轮 agent 响应超时(秒),超时后杀掉进程并报错
+timeout_secs = 120
 
 [models]
 asr_dir = "assets/models/asr-zh"
@@ -27,9 +35,16 @@ tts_voice = "0"
 tts_kind = "vits"
 asr_threads = 2
 tts_threads = 4
+# VAD 语音/静音判定阈值(0-1),越低越不容易吞句尾
 vad_threshold = 0.3
+# VAD 判定"一句话说完"所需的尾部静音秒数,越大越不易截断句尾
 vad_min_silence = 0.5
-vad_tail_pad = 0.6   # 段弹出后追加的尾部音频,补偿渐弱尾音
+# VAD 判定"开始说话"所需的最小语音时长(秒)
+vad_min_speech = 0.25
+# VAD 允许的单段最长语音(秒)
+vad_max_speech = 20.0
+# 段弹出后追加的尾部音频时长(秒),补偿渐弱尾音被 VAD 截断
+vad_tail_pad = 0.6
 
 [ui]
 window_width = 960

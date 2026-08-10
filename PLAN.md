@@ -16,7 +16,7 @@ flowchart LR
     TTS -->|PCM| OUT[扬声器 rodio]
     BRAIN -->|阶段事件| SM[状态机]
     MIC -->|音量电平| SM
-    SM -->|动画状态| UI[macroquad 像素小人]
+    SM -->|动画状态| UI[eframe/egui 像素电视]
     ASR -->|识别中间结果| UI
 ```
 
@@ -31,7 +31,7 @@ flowchart LR
 | 语音识别 | `sherpa-onnx` 1.13.4 | `whisper-rs` 0.16 | 流式(边说边出字)+ 内置 silero-vad,中文用 Zipformer/Parakeet 模型,CPU 实时率 <0.5。whisper 非流式、延迟高,只适合离线批量 |
 | 大模型 | DeepSeek API(OpenAI 兼容),`reqwest` 手写 SSE | `async-openai`(改 base_url) | DeepSeek 无 ASR/TTS 服务,只负责对话 |
 | 语音合成 | **vits-zh-ll(定稿)**: 16kHz,14字 0.65s,首句 0.15s | kokoro(中英双语,~2.2s,音质好); supertonic-3(极快但无中文); matcha zh-en(双语+快,待接入) | 中文为主场景的最优平衡;`tts_kind` 可随时切换 |
-| 渲染 | `macroquad` | `bevy`(重)、`pixels`(裸 framebuffer,太底层) | 轻量跨平台,2D 像素风友好,API 简单,项目规模匹配 |
+| 渲染 | `eframe`/`egui`(glow) | `macroquad`(已弃用)、`bevy`(重) | 透明无边框置顶窗口 + 即时模式绘制,32x32 像素网格电视 + CRT 效果,托盘/窗口控制集成好 |
 | 异步 | `tokio` + `flume`/`tokio::mpsc` | — | 每阶段一个 task;sherpa-onnx 是同步 C 调用,放 `spawn_blocking` |
 | 配置 | `config` / `serde` + TOML | — | 存 API key、模型路径、语音参数 |
 
@@ -71,27 +71,34 @@ struct AppState {
 ```
 voxelf/
 ├── Cargo.toml
-├── config.toml            # api_key、模型路径、语速、音量
+├── config.toml            # api_key、模型路径、语速、音量(gitignore)
+├── config.example.toml    # 配置模板(全部字段)
 ├── assets/
-│   ├── models/            # sherpa-onnx 模型(encoder/decoder/joiner + tokens + TTS 模型)
-│   └── sprites/           # 像素小人 sprite sheet
+│   ├── models/            # sherpa-onnx 模型(ASR/VAD/TTS)
+│   └── fonts/             # SimHei/NotoSansSC(kaomoji 渲染)
 └── src/
-    ├── main.rs            # 装配 + tokio 启动
+    ├── main.rs            # CLI + 装配(日志/线程/窗口),不含业务逻辑
+    ├── pipeline.rs        # 语音主管线: 状态机 + 大脑循环 + 分句流式 TTS 管道
+    ├── state.rs           # Phase 状态机 + 共享 UiState
+    ├── config.rs          # TOML 配置 + 环境变量兜底
     ├── audio/
     │   ├── input.rs       # cpal 采集 + 电平计算
     │   └── output.rs      # rodio 播放
-    ├── asr.rs             # sherpa-onnx 流式识别 + VAD
-    ├── tts.rs             # sherpa-onnx Kokoro 合成
+    ├── asr.rs             # sherpa-onnx 流式识别 + VAD + 定位/延迟诊断命令
+    ├── tts.rs             # sherpa-onnx vits/kokoro 合成
     ├── brain/
-    │   ├── mod.rs         # BrainEvent 事件流 + BrainKind 分发
+    │   ├── mod.rs         # BrainEvent 事件流 + BrainKind 分发(enum,非 trait)
     │   ├── deepseek.rs    # SSE 流式聊天
     │   ├── agent.rs       # 常驻 jcode repl 进程适配(行解析/超时/重启)
-    │   └── hybrid.rs      # 双层大脑: 规则意图分流 → DeepSeek 或 agent
-    ├── state.rs           # 状态机 + 事件总线
+    │   └── hybrid.rs      # 双层大脑: agent-first,无 jcode 自动降级 DeepSeek
+    ├── tray.rs            # 系统托盘(独立线程事件转发 + 去抖)
     └── ui/
-        ├── app.rs         # macroquad 主循环
+        ├── app.rs         # eframe 桌宠窗口(像素电视/字幕/托盘同步)
         └── kaomoji.rs     # 颜文字表情(按状态/时间驱动动画)
 ```
+
+核心闭环在 `pipeline.rs`:`run_stream_pipeline` 通过 `synthesize`/`enqueue` 两个窄闭包注入 I/O,
+测试用假合成/假播放即可验证流式语义,无需模型文件与音频设备。
 
 ## 6. Agent 接入(已实现:双层大脑)
 
@@ -103,7 +110,7 @@ enum BrainEvent { Delta(String), Done(String), Err(String), Working(String) }
 - **输出行解析**(`classify`):banner / `[Tokens]` 元信息 / `[工具名] 参数`(→ Working 事件)/ ` → 工具结果回显`(不朗读)/ `> 正文`(→ Delta)分门别类;轮结束判定 = 空 prompt 或 `[Tokens]` 后双空行(工具轮中间的 `[Tokens]` 后只有单空行,不会误断)。
 - **双层大脑(agent-first,`hybrid.rs`)**:检测到 jcode 时**所有**请求都走常驻 agent(工具/联网/上下文记忆全具备),未安装或禁用时自动降级纯 DeepSeek。每轮请求注入 Vox 人设(简短口语化、无列表/markdown/emoji、句号分隔),保证语音朗读体验与 DeepSeek 直连一致。
 - **安全**:默认 `--tool-profile minimal`(只读工具集),或 `--tools read,write,edit,websearch,webfetch` 白名单(联网搜索/抓取,实测天气查询:websearch 被 DDG 反爬拦截时 agent 自动降级 webfetch 抓 wttr.in);`timeout_secs` 超时自动杀进程重启。
-- Brain trait 同时被 DeepSeek、Agent、Hybrid 实现,UI/音频层不感知差异。
+- Brain 以 `BrainKind` enum(DeepSeek/Agent/Hybrid)+ 事件流接口提供,UI/音频层不感知差异。
 
 ## 7. 里程碑(按序交付)
 
