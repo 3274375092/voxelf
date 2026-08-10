@@ -35,6 +35,12 @@ const STRONG_PREFIX: &[&str] = &[
     "帮我关闭",
     "帮我把",
     "帮我读",
+    // 查询类(需要联网,DeepSeek 不能联网会编造): 搜索/查天气/查新闻/看网页
+    "帮我查",
+    "帮我搜",
+    "帮我看看",
+    "帮我查一下",
+    "帮我搜一下",
 ];
 
 /// 动作词:与 OBJECTS 组合命中才算操作(单独出现不算,如"打开音乐")。
@@ -90,7 +96,11 @@ impl HybridBrain {
         {
             tracing::info!("[hybrid] 操作类请求 → agent: {text}");
             let _ = tx.send(BrainEvent::Working("任务".into()));
-            agent.run_streaming(text, tx).await;
+            // 轻量提示: 缓解模型偶发不调用 web 工具(deepseek-v4-flash 曾直接拒绝查天气)
+            let boosted = format!(
+                "{text}\n(若需要天气/新闻/实时等最新信息,请使用 websearch 或 webfetch 工具获取真实数据,不要凭空回答)"
+            );
+            agent.run_streaming(&boosted, tx).await;
             return;
         }
         tracing::info!("[hybrid] 闲聊 → DeepSeek: {text}");
@@ -108,11 +118,10 @@ mod tests {
         for s in [
             "你好呀",
             "今天天气怎么样",
-            "帮我看看明天的天气",
-            "帮我查一下北京到上海的高铁",
+            "明天会下雨吗",
             "给我讲个笑话",
             "你会唱什么歌",
-            "打开音乐播放器",   // 动作但无对象词,不误判
+            "打开音乐播放器", // 动作但无对象词,不误判
             "我们明天去哪玩",
         ] {
             assert_eq!(classify_intent(s), Intent::Chat, "应保持闲聊: {s}");
@@ -134,6 +143,11 @@ mod tests {
             "帮我打开文件管理器",
             "帮我读一下 config.toml 的前5行",
             "读取这个配置文件",
+            // 联网查询(DeepSeek 不联网,转 agent 用 websearch/webfetch)
+            "帮我看看明天的天气",
+            "帮我查一下北京到上海的高铁",
+            "帮我搜一下最近的新闻",
+            "帮我查一下这个词是什么意思",
         ] {
             assert_eq!(classify_intent(s), Intent::Agent, "应判定为操作: {s}");
         }
