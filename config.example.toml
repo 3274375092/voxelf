@@ -24,6 +24,9 @@ tts_model_file = "model.int8.onnx"
 tts_voice = "xiaoxiao"   # xiaobei | xiaoni | xiaoxiao | xiaoyi
 asr_threads = 2
 tts_threads = 2
+vad_threshold = 0.3
+vad_min_silence = 0.8
+vad_tail_pad = 0.6   # 段弹出后追加的尾部音频,补偿渐弱尾音
 
 [ui]
 window_width = 960

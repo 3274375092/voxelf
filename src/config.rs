@@ -44,6 +44,16 @@ pub struct ModelCfg {
     pub tts_voice: String,
     pub asr_threads: i32,
     pub tts_threads: i32,
+    /// VAD 语音/静音判定阈值(0-1),越低越不容易吞句尾
+    pub vad_threshold: f32,
+    /// VAD 判定"一句话说完"所需的尾部静音秒数,越大越不易截断句尾
+    pub vad_min_silence: f32,
+    /// VAD 判定"开始说话"所需的最小语音时长(秒)
+    pub vad_min_speech: f32,
+    /// VAD 允许的单段最长语音(秒)
+    pub vad_max_speech: f32,
+    /// 段弹出后追加的尾部音频时长(秒),补偿渐弱尾音被 VAD 截断
+    pub vad_tail_pad: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,6 +93,11 @@ impl Default for ModelCfg {
             tts_voice: "xiaoxiao".into(),
             asr_threads: 2,
             tts_threads: 2,
+            vad_threshold: 0.3,
+            vad_min_silence: 0.8,
+            vad_min_speech: 0.25,
+            vad_max_speech: 20.0,
+            vad_tail_pad: 0.6,
         }
     }
 }

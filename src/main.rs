@@ -39,6 +39,8 @@ enum Cmd {
     Tts { text: String, out: Option<String> },
     /// 纯文本对话(不走语音)
     Chat { text: String },
+    /// ASR 定位测试: TTS 合成已知文本,三模式对照找"吞句尾"问题
+    AsrDiag { text: String },
 }
 
 fn main() -> Result<()> {
@@ -83,6 +85,7 @@ fn main() -> Result<()> {
             });
             Ok(())
         }
+        Cmd::AsrDiag { text } => asr::run_asr_diag(&cfg, &text),
     }
 }
 
