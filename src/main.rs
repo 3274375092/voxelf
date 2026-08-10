@@ -49,10 +49,34 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
+    // 日志同时输出到 stderr 与 voxelf.log(桌面启动时定位问题用)
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("voxelf.log")
+        .ok();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
+        .with_writer(move || -> Box<dyn std::io::Write> {
+            if let Some(f) = &log_file {
+                struct Dual(std::io::Stderr, std::fs::File);
+                impl std::io::Write for Dual {
+                    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                        let _ = self.0.write(buf);
+                        self.1.write(buf)
+                    }
+                    fn flush(&mut self) -> std::io::Result<()> {
+                        let _ = self.0.flush();
+                        self.1.flush()
+                    }
+                }
+                Box::new(Dual(std::io::stderr(), f.try_clone().unwrap()))
+            } else {
+                Box::new(std::io::stderr())
+            }
+        })
         .init();
 
     let cli = Cli::parse();

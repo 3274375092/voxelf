@@ -20,6 +20,9 @@ pub struct VoxApp {
     tray: Option<Tray>,
     locked: bool,
     topmost: bool,
+    quitting: bool,
+    /// 托盘动作反馈(字幕短暂显示,确认命令生效)
+    feedback: Option<(String, f64)>,
 }
 
 /// 字幕文本截断: 超过 max_chars 字符截断并加省略号(纯函数,可测试)。
@@ -35,7 +38,20 @@ fn subtitle_text(text: &str, max_chars: usize) -> String {
 
 impl VoxApp {
     pub fn new(state: SharedState, tray: Option<Tray>) -> Self {
-        Self { state, t: 0.0, tray, locked: false, topmost: true }
+        Self {
+            state,
+            t: 0.0,
+            tray,
+            locked: false,
+            topmost: true,
+            quitting: false,
+            feedback: None,
+        }
+    }
+
+    /// 显示 2 秒反馈字幕(托盘动作确认)
+    fn set_feedback(&mut self, msg: impl Into<String>) {
+        self.feedback = Some((msg.into(), self.t));
     }
 
     fn phase_color(phase: Phase) -> egui::Color32 {
@@ -301,7 +317,17 @@ impl VoxApp {
         }
 
         // ---- 字幕(屏幕内底部,贴底向上生长,层级最高) ----
-        let text = self.status_text(&st);
+        // 托盘动作反馈优先显示 2 秒
+        let text = if let Some((msg, at)) = &self.feedback {
+            if self.t - *at < 2.0 {
+                msg.clone()
+            } else {
+                self.feedback = None;
+                self.status_text(&st)
+            }
+        } else {
+            self.status_text(&st)
+        };
         let wrap_w = g(24.0);
         // 截断到最多 3 行(~23 字/行),超出加省略号
         let max_chars = 69;
@@ -399,37 +425,56 @@ impl eframe::App for VoxApp {
         self.t += dt;
         let ctx = ui.ctx().clone();
 
-        // 托盘命令
-        if let Some(t) = self.tray.as_mut() {
-            match t.poll() {
-                Some(TrayAction::ToggleVisible) => {
+        // 托盘命令(先取出动作,避免 self 借用冲突)
+        let tray_action = if let Some(t) = self.tray.as_mut() {
+            let a = t.poll();
+            t.sync(self.locked, self.topmost);
+            a
+        } else {
+            None
+        };
+        if let Some(action) = tray_action {
+            match action {
+                TrayAction::ToggleVisible => {
                     let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
+                    tracing::info!("托盘: 切换可见性 {visible} → {}", !visible);
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(!visible));
                 }
-                Some(TrayAction::ToggleLock) => {
+                TrayAction::ToggleLock => {
                     self.locked = !self.locked;
+                    tracing::info!("托盘: 锁定位置 = {}", self.locked);
+                    self.set_feedback(if self.locked { "已锁定位置" } else { "已解锁" });
                 }
-                Some(TrayAction::ToggleTopmost) => {
+                TrayAction::ToggleTopmost => {
                     self.topmost = !self.topmost;
                     let level = if self.topmost {
                         egui::WindowLevel::AlwaysOnTop
                     } else {
                         egui::WindowLevel::Normal
                     };
+                    tracing::info!("托盘: 置顶 = {}", self.topmost);
                     ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+                    self.set_feedback(if self.topmost { "已置顶" } else { "取消置顶" });
                 }
-                Some(TrayAction::ToggleAutostart) => {}
-                Some(TrayAction::Quit) => {
+                TrayAction::ToggleAutostart => {
+                    let on = crate::tray::is_autostart();
+                    tracing::info!("托盘: 开机自启 = {on}");
+                    self.set_feedback(if on { "已开启开机自启" } else { "已关闭开机自启" });
+                }
+                TrayAction::Quit => {
+                    // 标记真正退出,放行 close(否则被 close_requested 拦截成隐藏)
+                    tracing::info!("托盘: 退出");
+                    self.quitting = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
-                None => {}
             }
-            // 同步菜单状态
-            t.sync(self.locked, self.topmost);
         }
 
-        // 关闭窗口(Alt+F4/系统关闭)→ 隐藏到托盘而非退出
+        // 关闭窗口(Alt+F4/系统关闭)→ 隐藏到托盘而非退出;托盘"退出"放行
         if ctx.input(|i| i.viewport().close_requested()) {
+            if self.quitting {
+                return; // 放行,让 eframe 正常退出
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             return;

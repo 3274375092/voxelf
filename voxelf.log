@@ -1,0 +1,32 @@
+[2m2026-08-10T12:50:52.093304Z[0m [32m INFO[0m [2mvoxelf::audio::input[0m[2m:[0m 麦克风: "麦克风阵列 (适用于数字麦克风的英特尔® 智音技术)" 格式 F32 声道 4 采样率 48000
+[2m2026-08-10T12:50:52.733931Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m eframe 字体加载: assets/fonts/SimHei.ttf
+[2m2026-08-10T12:50:53.502710Z[0m [32m INFO[0m [2mvoxelf::tts[0m[2m:[0m TTS 初始化完成(vits): 采样率 16000 speaker 0
+[2m2026-08-10T12:50:54.230690Z[0m [32m INFO[0m [2mvoxelf::asr[0m[2m:[0m ASR 初始化完成 (vad_threshold=0.3 min_silence=0.5)
+[2m2026-08-10T12:50:55.702236Z[0m [32m INFO[0m [2mvoxelf::asr[0m[2m:[0m LATENCY ASR 段 1.37s 解码耗时 0.08s
+[2m2026-08-10T12:50:55.702625Z[0m [32m INFO[0m [2mvoxelf[0m[2m:[0m 识别: 你好呀
+[2m2026-08-10T12:50:55.703154Z[0m [32m INFO[0m [2mvoxelf::brain::hybrid[0m[2m:[0m [hybrid] agent-first → jcode: 你好呀
+[2m2026-08-10T12:50:58.497850Z[0m [32m INFO[0m [2mvoxelf::tts[0m[2m:[0m LATENCY TTS 合成 0.22s (4字 -> 音频 0.8s)
+[2m2026-08-10T12:50:58.499506Z[0m [32m INFO[0m [2mvoxelf[0m[2m:[0m LATENCY 识别完成->首句开播 2.80s
+[2m2026-08-10T12:50:58.500496Z[0m [32m INFO[0m [2mvoxelf[0m[2m:[0m LATENCY 收到合成音频 0.8s (剩余 5)
+[2m2026-08-10T12:50:58.783765Z[0m [32m INFO[0m [2mvoxelf::tts[0m[2m:[0m LATENCY TTS 合成 0.28s (15字 -> 音频 1.8s)
+[2m2026-08-10T12:50:58.784463Z[0m [32m INFO[0m [2mvoxelf[0m[2m:[0m LATENCY 收到合成音频 2.1s (剩余 4)
+[2m2026-08-10T12:50:59.021127Z[0m [32m INFO[0m [2mvoxelf::tts[0m[2m:[0m LATENCY TTS 合成 0.24s (10字 -> 音频 1.5s)
+[2m2026-08-10T12:50:59.021441Z[0m [32m INFO[0m [2mvoxelf[0m[2m:[0m LATENCY 收到合成音频 1.8s (剩余 3)
+[2m2026-08-10T12:50:59.215940Z[0m [32m INFO[0m [2mvoxelf::tts[0m[2m:[0m LATENCY TTS 合成 0.19s (9字 -> 音频 1.4s)
+[2m2026-08-10T12:50:59.216407Z[0m [32m INFO[0m [2mvoxelf[0m[2m:[0m LATENCY 收到合成音频 1.7s (剩余 2)
+[2m2026-08-10T12:50:59.622874Z[0m [32m INFO[0m [2mvoxelf::tts[0m[2m:[0m LATENCY TTS 合成 0.41s (19字 -> 音频 2.9s)
+[2m2026-08-10T12:50:59.625048Z[0m [32m INFO[0m [2mvoxelf[0m[2m:[0m LATENCY 收到合成音频 3.2s (剩余 1)
+[2m2026-08-10T12:50:59.625709Z[0m [32m INFO[0m [2mvoxelf[0m[2m:[0m LATENCY 管道结束 played=true pending=0 aborted=false
+[2m2026-08-10T12:50:59.626049Z[0m [32m INFO[0m [2mvoxelf[0m[2m:[0m LATENCY 全部句子已入队 (总等待 3.92s, 共 57 字)
+[2m2026-08-10T12:51:23.124329Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m 托盘: 切换可见性 true → false
+[2m2026-08-10T12:51:23.149129Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m 托盘: 锁定位置 = true
+[2m2026-08-10T12:51:23.389414Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m 托盘: 切换可见性 true → false
+[2m2026-08-10T12:51:25.258725Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m 托盘: 切换可见性 true → false
+[2m2026-08-10T12:51:27.617864Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m 托盘: 切换可见性 true → false
+[2m2026-08-10T12:51:30.380230Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m 托盘: 切换可见性 true → false
+[2m2026-08-10T12:51:31.206076Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m 托盘: 切换可见性 true → false
+[2m2026-08-10T12:51:32.203917Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m 托盘: 锁定位置 = false
+[2m2026-08-10T12:51:37.946011Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m 托盘: 切换可见性 true → false
+[2m2026-08-10T12:51:38.057925Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m 托盘: 切换可见性 true → false
+[2m2026-08-10T12:51:45.411928Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m 托盘: 切换可见性 true → false
+[2m2026-08-10T12:51:45.982708Z[0m [32m INFO[0m [2mvoxelf::ui::app[0m[2m:[0m 托盘: 退出

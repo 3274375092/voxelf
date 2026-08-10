@@ -16,6 +16,18 @@ pub enum TrayAction {
     Quit,
 }
 
+/// 菜单 id → 动作(纯函数,可测试)
+pub fn action_for_id(id: &str) -> Option<TrayAction> {
+    match id {
+        "toggle" => Some(TrayAction::ToggleVisible),
+        "lock" => Some(TrayAction::ToggleLock),
+        "topmost" => Some(TrayAction::ToggleTopmost),
+        "autostart" => Some(TrayAction::ToggleAutostart),
+        "quit" => Some(TrayAction::Quit),
+        _ => None,
+    }
+}
+
 pub struct Tray {
     _icon: tray_icon::TrayIcon,
     menu: muda::Menu,
@@ -134,27 +146,25 @@ impl Tray {
     pub fn poll(&mut self) -> Option<TrayAction> {
         // 菜单点击
         if let Ok(ev) = muda::MenuEvent::receiver().try_recv() {
-            return match ev.id.0.as_str() {
-                "toggle" => Some(TrayAction::ToggleVisible),
-                "lock" => {
+            let action = action_for_id(ev.id.0.as_str())?;
+            // 切换类菜单项: 同步勾选状态
+            match action {
+                TrayAction::ToggleLock => {
                     let next = !self.lock_item.is_checked();
                     self.lock_item.set_checked(next);
-                    Some(TrayAction::ToggleLock)
                 }
-                "topmost" => {
+                TrayAction::ToggleTopmost => {
                     let next = !self.topmost_item.is_checked();
                     self.topmost_item.set_checked(next);
-                    Some(TrayAction::ToggleTopmost)
                 }
-                "autostart" => {
+                TrayAction::ToggleAutostart => {
                     let next = !self.autostart_item.is_checked();
                     let _ = set_autostart(next);
                     self.autostart_item.set_checked(next);
-                    Some(TrayAction::ToggleAutostart)
                 }
-                "quit" => Some(TrayAction::Quit),
-                _ => None,
-            };
+                _ => {}
+            }
+            return Some(action);
         }
         // 双击托盘图标 → 显示/隐藏
         if let Ok(ev) = tray_icon::TrayIconEvent::receiver().try_recv() {
@@ -178,5 +188,37 @@ impl Tray {
     #[allow(dead_code)]
     fn _keep_menu_alive(&self) -> &muda::Menu {
         &self.menu
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 菜单 id → 动作映射必须与菜单项 id 一致(不一致 = 点了没反应)
+    #[test]
+    fn menu_id_mapping_works() {
+        assert_eq!(action_for_id("toggle"), Some(TrayAction::ToggleVisible));
+        assert_eq!(action_for_id("lock"), Some(TrayAction::ToggleLock));
+        assert_eq!(action_for_id("topmost"), Some(TrayAction::ToggleTopmost));
+        assert_eq!(action_for_id("autostart"), Some(TrayAction::ToggleAutostart));
+        assert_eq!(action_for_id("quit"), Some(TrayAction::Quit));
+        assert_eq!(action_for_id("unknown"), None);
+        assert_eq!(action_for_id(""), None);
+    }
+
+    /// 开机自启注册表往返: 写入 → 读回 true → 删除 → 读回 false。
+    /// 测试结束恢复原状,不影响用户设置。
+    #[test]
+    fn autostart_registry_roundtrip() {
+        let original = is_autostart();
+        set_autostart(true).expect("写入注册表应成功");
+        assert!(is_autostart(), "写入后应检测到自启");
+        set_autostart(false).expect("删除注册表应成功");
+        assert!(!is_autostart(), "删除后应检测不到自启");
+        // 恢复用户原状
+        if original {
+            set_autostart(true).expect("恢复自启");
+        }
     }
 }
