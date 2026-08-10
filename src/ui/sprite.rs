@@ -4,59 +4,56 @@ use crate::state::Phase;
 
 pub const SIZE: usize = 32;
 
-/// 奶龙风格小胖龙 32x32(原创,非 IP 原图;每行恰好 32 字符)。
-/// 字符含义: . 透明 | O 轮廓 | B 身体(奶黄橙) | D 阴影 | W 奶油肚皮/高光
-///           E 眼睛 | H 眼神光 | C 腮红 | M 嘴 | F 脚
+/// 奶蛙风格 32x32(原创,AI 变异版: 头小身大+五官失调+狂笑大嘴;每行恰好 32 字符)。
+/// 字符含义: . 透明 | O 轮廓 | B 身体(奶黄橙) | D 阴影 | W 奶油肚皮
+///           E 眼睛 | H 眼神光 | C 腮红 | M 嘴 | F 脚蹼
 const ROWS: [&str; SIZE] = [
     "................................",
     "................................",
     "................................",
     "................................",
+    "..............OOOOOO............",
     ".............OOOOOO.............",
-    "...........OBBBBBBBBO...........",
-    "..........OBBBBBBBBBBO..........",
-    ".........OBBBBBBBBBBBBO.........",
-    "........OBBBBBBBBBBBBBBO........",
-    "........OBBBBBBBBBBBBBBBO.......",
-    ".......OBBBBBBBBBBBBBBBBO.......",
-    ".......OBBEHBBBBBBBEHBBBO.......",
-    "......OBBEEBBBBBBBBEEBBBO.......",
-    "......OBBEEBBBBBBBBEEBBBO.......",
-    ".......OBBCBBBBBBBBBCBBO........",
-    ".......OBBWWBBBBBBWWBBBO........",
-    ".......OBBWWWMMMMMWWWBBO........",
-    ".......OBBWWWWWWWWWWBBO.........",
-    ".......OBBBBBBBBBBBBBBO.........",
-    "....WW.....OBBBBBBBBBBO...WW....",
-    ".....WW......OBBBBBBBO...WW.....",
-    "..........OBBBBBBBBO............",
-    "........OOOOBBBBBBBBOOOO........",
-    ".......OBBOBBBBBBBBOBBO.........",
-    ".......OBBOBBBBBBBBOBBO.........",
-    ".......OBBOBBBBBBBBOBBO.........",
-    "........OOOBBBBBBBBOOO..........",
+    "............OBBBBBBO............",
+    "............OEBEEBO.............",
+    "............OBBBBBBO............",
+    "...........OMMMMMMMO............",
+    "............OBBBBBBO............",
+    ".............OOOOO..............",
+    "...........OOOOOOOOO............",
+    "..........OBBBBBBBBBO...........",
+    ".........OBBBBBBBBBBBO..........",
+    ".........OBBBBBBBBBBBO..........",
+    "........OBBBBBBBBBBBBBO.........",
+    "........OBBWWWWWWWWWBBBO........",
+    "........OBBWWWWWWWWWBBBO........",
+    "........OBBWWWWWWWWWBBBO........",
+    "........OBBBBBBBBBBBBBO.........",
+    "........OBBBBBBBBBBBBBO.........",
+    ".........OBBBBBBBBBBBO..........",
     "..........OBBBBBBBBBO...........",
     "..........OBBBBBBBBBO...........",
-    "..........OBFFFFFFFBOO..........",
-    "...........OFFFFFFFFO...........",
+    ".........OBBBBBBBBBBBO..........",
+    "........OOOOOOOOOOOOOOO.........",
+    "......OOOOOOOOOOOOOOOOOOO.......",
+    ".......OBBBBBBBBBBBBBO..........",
+    "......OBFFFFFFFFFFFFFFBO........",
+    "......OFFFFFFFFFFFFFFFFO........",
     "................................",
 ];
 
-/// 眼睛所在的格子(眨眼时替换为身体色)
-const EYES: [(usize, usize); 8] = [
-    (9, 12), (10, 12), (9, 13), (10, 13),
-    (19, 12), (20, 12), (19, 13), (20, 13),
-];
+/// 眼睛所在的格子(大小眼:左小右大,五官失调;眨眼时替换为身体色)
+const EYES: [(usize, usize); 3] = [(13, 7), (15, 7), (16, 7)];
 /// 眼神光(睁眼时保留,闭眼时消失)
-const HIGHLIGHTS: [(usize, usize); 2] = [(11, 11), (20, 11)];
+const HIGHLIGHTS: [(usize, usize); 2] = [(12, 6), (17, 6)];
 /// 聆听时头顶竖起的小耳羽(奶油色)
 const EARS: [(usize, usize); 8] = [
-    (9, 9), (10, 9), (9, 10), (10, 10),
-    (21, 9), (22, 9), (21, 10), (22, 10),
+    (11, 5), (12, 5), (11, 6), (12, 6),
+    (19, 5), (20, 5), (19, 6), (20, 6),
 ];
-/// 嘴巴所在行与列范围
-const MOUTH_ROW: usize = 16;
-const MOUTH_COLS: std::ops::Range<usize> = 13..18;
+/// 嘴巴所在行与列范围(狂笑大嘴,几乎占满整张脸)
+const MOUTH_ROW: usize = 9;
+const MOUTH_COLS: std::ops::Range<usize> = 11..19;
 
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -121,12 +118,12 @@ impl Sprite {
         }
     }
 
-    /// 嘴巴张开程度: 0.0 闭嘴(奶油色), 1.0 大张嘴
+    /// 嘴巴张开程度: 0.0 闭嘴(身体色), 1.0 大张嘴(狂笑)
     pub fn mouth(&mut self, open: f32) {
-        let n = (open * 5.0).round() as usize;
-        let pad = (5 - n) / 2;
+        let n = (open * 7.0).round() as usize;
+        let pad = (7 - n) / 2;
         for (i, x) in MOUTH_COLS.enumerate() {
-            self.grid[MOUTH_ROW][x] = if n > 0 && i >= pad && i < pad + n { 'M' } else { 'W' };
+            self.grid[MOUTH_ROW][x] = if n > 0 && i >= pad && i < pad + n { 'M' } else { 'B' };
         }
     }
 
