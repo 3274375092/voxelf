@@ -1,4 +1,4 @@
-//! eframe(egui)桌宠 UI: 32x32 像素网格电视(每格 10px = 320x320 窗口),
+﻿//! eframe(egui)桌宠 UI: 32x32 像素网格电视(每格 10px = 320x320 窗口),
 //! 透明无边框 + 置顶 + 可拖动,颜文字在屏幕里发光显示。
 //! 状态总线与 ASR/大脑/TTS 管道完全解耦。
 
@@ -157,42 +157,90 @@ impl VoxApp {
         // 32x32 网格,每格 10px
         const G: f32 = 10.0;
         let g = |n: f32| n * G;
-        let shell_top = egui::Color32::from_rgb(0x48, 0x4c, 0x68);
-        let shell_mid = egui::Color32::from_rgb(0x3c, 0x3f, 0x56);
-        let shell_bot = egui::Color32::from_rgb(0x2e, 0x30, 0x42);
-        let edge = egui::Color32::from_rgb(0x5a, 0x5f, 0x82);
+        let shell_top = egui::Color32::from_rgb(0x4a, 0x4e, 0x6c);
+        let shell_mid = egui::Color32::from_rgb(0x3b, 0x3e, 0x55);
+        let shell_bot = egui::Color32::from_rgb(0x2b, 0x2d, 0x3e);
+        let edge = egui::Color32::from_rgb(0x5e, 0x63, 0x86);
 
         // ---- 外壳(格 1..31,像素圆角) ----
         let tv = egui::Rect::from_min_max(egui::pos2(g(1.0), g(1.0)), egui::pos2(g(31.0), g(31.0)));
         painter.rect_filled(tv, egui::CornerRadius::same(10), shell_mid);
-        for (y0, y1, c) in [(1.0, 10.0, shell_top), (10.0, 24.0, shell_mid), (24.0, 31.0, shell_bot)] {
+        for (y0, y1, c) in [(1.0, 8.0, shell_top), (8.0, 22.0, shell_mid), (22.0, 31.0, shell_bot)] {
             let r = egui::Rect::from_min_max(egui::pos2(g(1.0), g(y0)), egui::pos2(g(31.0), g(y1)));
             painter.rect_filled(r, egui::CornerRadius::ZERO, c);
         }
         painter.rect_stroke(tv, egui::CornerRadius::same(10), egui::Stroke::new(2.0, edge), egui::StrokeKind::Inside);
-        // 顶部高光带
+        // 顶部高光带(更亮更宽,模拟曲面)
         painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(g(2.0), g(1.2)), egui::pos2(g(30.0), g(1.8))),
+            egui::Rect::from_min_max(egui::pos2(g(2.0), g(1.15)), egui::pos2(g(30.0), g(1.6))),
             egui::CornerRadius::same(2),
-            egui::Color32::from_rgba_unmultiplied(220, 225, 255, 36),
+            egui::Color32::from_rgba_unmultiplied(230, 235, 255, 60),
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(g(2.0), g(1.7)), egui::pos2(g(30.0), g(2.1))),
+            egui::CornerRadius::same(2),
+            egui::Color32::from_rgba_unmultiplied(200, 210, 245, 22),
         );
 
         // ---- 屏幕(格 2..30 x 3..25) ----
         let screen = egui::Rect::from_min_max(egui::pos2(g(2.0), g(3.0)), egui::pos2(g(30.0), g(25.0)));
-        painter.rect_filled(screen, egui::CornerRadius::same(6), egui::Color32::from_rgb(0x0a, 0x0c, 0x16));
-        let screen_in = egui::Rect::from_min_max(egui::pos2(g(3.0), g(4.0)), egui::pos2(g(29.0), g(24.0)));
-        painter.rect_filled(screen_in, egui::CornerRadius::same(4), egui::Color32::from_rgb(0x11, 0x13, 0x22));
-        if st.phase == Phase::Working {
-            let pulse = 40 + 26 * (t * 8.0).sin().abs() as u8;
+        painter.rect_filled(screen, egui::CornerRadius::same(6), egui::Color32::from_rgb(0x08, 0x0a, 0x13));
+        // 屏幕内凹阴影(3 层渐深,模拟 CRT 凹陷)
+        for i in 0..3 {
+            let s = screen.shrink(2.0 + i as f32 * 1.5);
             painter.rect_stroke(
-                screen_in,
-                egui::CornerRadius::same(4),
-                egui::Stroke::new(2.0, egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), pulse)),
+                s,
+                egui::CornerRadius::same(5),
+                egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 26 - i as u8 * 7)),
                 egui::StrokeKind::Inside,
             );
         }
-        // 屏幕底部辉光
-        for (i, a) in [(0u8, 10u8), (1, 18), (2, 26)] {
+        let screen_in = egui::Rect::from_min_max(egui::pos2(g(3.0), g(4.0)), egui::pos2(g(29.0), g(24.0)));
+        painter.rect_filled(screen_in, egui::CornerRadius::same(4), egui::Color32::from_rgb(0x10, 0x12, 0x21));
+
+        // 屏幕呼吸光: 所有状态屏幕边缘带 accent 微光,Working 快速脉冲
+        let breathe = 0.5 + 0.5 * (t * 1.4).sin();
+        let pulse = if st.phase == Phase::Working {
+            0.7 + 0.3 * (t * 8.0).sin().abs()
+        } else {
+            breathe
+        };
+        painter.rect_stroke(
+            screen_in,
+            egui::CornerRadius::same(4),
+            egui::Stroke::new(
+                2.0,
+                egui::Color32::from_rgba_unmultiplied(
+                    accent.r(),
+                    accent.g(),
+                    accent.b(),
+                    (12.0 + 20.0 * pulse) as u8,
+                ),
+            ),
+            egui::StrokeKind::Inside,
+        );
+
+        // CRT 雪花噪点(待机/聆听时,屏幕内固定伪随机点,微闪)
+        if st.phase == Phase::Idle || st.phase == Phase::Listening {
+            let mut seed: u32 = 0x9e37_79b9;
+            let mut rnd = move || {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                (seed >> 8) as f32 / 16777216.0
+            };
+            for i in 0..46 {
+                let nx = g(3.5) + rnd() * g(25.0);
+                let ny = g(4.5) + rnd() * g(18.5);
+                let tw = 0.4 + 0.6 * (0.5 + 0.5 * (t * (2.0 + rnd() * 3.0) + i as f32).sin());
+                painter.rect_filled(
+                    egui::Rect::from_min_size(egui::pos2(nx, ny), egui::vec2(1.2, 1.2)),
+                    0.5,
+                    egui::Color32::from_rgba_unmultiplied(200, 205, 230, (5.0 + 9.0 * tw) as u8),
+                );
+            }
+        }
+
+        // 屏幕底部辉光(呼吸)
+        for (i, a) in [(0u8, 8u8), (1, 15), (2, 22)] {
             let gh = egui::Rect::from_min_max(
                 egui::pos2(g(4.0), g(21.0) + i as f32 * 8.0),
                 egui::pos2(g(28.0), g(22.0) + i as f32 * 8.0),
@@ -200,7 +248,12 @@ impl VoxApp {
             painter.rect_filled(
                 gh,
                 egui::CornerRadius::same(4),
-                egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), a),
+                egui::Color32::from_rgba_unmultiplied(
+                    accent.r(),
+                    accent.g(),
+                    accent.b(),
+                    (a as f32 * (0.6 + 0.4 * breathe)) as u8,
+                ),
             );
         }
 
@@ -219,12 +272,18 @@ impl VoxApp {
                 egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12)),
             );
         }
-        // 玻璃反光
-        painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(g(4.0), g(4.5)), egui::pos2(g(14.0), g(5.2))),
-            egui::CornerRadius::same(2),
-            egui::Color32::from_rgba_unmultiplied(190, 200, 240, 15),
-        );
+        // 玻璃反光(弧形,多段递减宽度)
+        for (i, w) in [(0, 0.42f32), (1, 0.30), (2, 0.18), (3, 0.08)] {
+            let wpx = screen_in.width() * w;
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(screen_in.min.x + (screen_in.width() - wpx) / 2.0, g(4.4) + i as f32 * 1.6),
+                    egui::pos2(screen_in.min.x + (screen_in.width() + wpx) / 2.0, g(4.8) + i as f32 * 1.6),
+                ),
+                egui::CornerRadius::same(2),
+                egui::Color32::from_rgba_unmultiplied(190, 200, 240, (15 - i as u8 * 3) as u8),
+            );
+        }
 
         // ---- 字幕(屏幕内底部) ----
         let text = self.status_text(&st);
@@ -245,20 +304,30 @@ impl VoxApp {
             egui::Color32::from_rgb(0xcf, 0xd4, 0xf0),
         );
 
-        // ---- 底部控制条(格 25..31): 电源灯 + 品牌 + 旋钮 ----
+        // ---- 底部控制条(格 25..31): 频道 + 电源灯 + 品牌 + 旋钮 ----
         let ctrl_y = g(28.0);
-        let led = egui::pos2(g(4.5), ctrl_y);
+        // 频道字(左侧)
+        painter.text(
+            egui::pos2(g(2.2), ctrl_y),
+            egui::Align2::LEFT_CENTER,
+            "CH-1",
+            egui::FontId::monospace(9.0),
+            egui::Color32::from_rgb(0x6a, 0x6f, 0x90),
+        );
+        // 电源指示灯(呼吸)
+        let led = egui::pos2(g(7.0), ctrl_y);
         let led_alpha = if st.phase == Phase::Error {
             (0.35 + 0.65 * (0.5 + 0.5 * (t * 5.0).sin())) as u8 * 255
         } else {
-            255
+            (170.0 + 60.0 * breathe) as u8
         };
         painter.circle_filled(
             led,
             3.0,
             egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), led_alpha),
         );
-        painter.circle_filled(led, 1.4, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 70));
+        painter.circle_filled(led, 1.3, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 60));
+        // 品牌字
         painter.text(
             egui::pos2(g(16.0), ctrl_y),
             egui::Align2::CENTER_CENTER,
@@ -266,10 +335,20 @@ impl VoxApp {
             egui::FontId::proportional(11.0),
             egui::Color32::from_rgb(0x8a, 0x8f, 0xb0),
         );
+        // 旋钮(带刻度)
         let knob = egui::pos2(g(27.5), ctrl_y);
         painter.circle_filled(knob, 6.0, shell_bot);
         painter.circle_stroke(knob, 6.0, egui::Stroke::new(1.5, edge));
         painter.circle_filled(knob, 2.2, accent);
+        let tick = egui::pos2(knob.x, knob.y - 4.6);
+        painter.circle_filled(tick, 0.9, egui::Color32::from_rgb(0x8a, 0x8f, 0xb0));
+
+        // 外壳底部反射(屏幕光映到外壳下缘)
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(g(3.0), g(29.5)), egui::pos2(g(29.0), g(30.0))),
+            egui::CornerRadius::same(2),
+            egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), (10.0 + 14.0 * breathe) as u8),
+        );
 
         // 拖动: 按住电视移动窗口
         let ctx = ui.ctx().clone();
