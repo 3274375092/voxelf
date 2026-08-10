@@ -117,9 +117,22 @@ impl Default for ModelCfg {
 }
 impl Config {
     pub fn load() -> Result<Self> {
-        let mut cfg = match std::fs::read_to_string("config.toml") {
+        Self::load_from("config.toml")
+    }
+
+    /// 从指定路径加载(测试用注入路径,避免改进程 CWD 影响并行测试)。
+    pub(crate) fn load_from(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let mut cfg = match std::fs::read_to_string(path) {
             Ok(text) => toml::from_str(&text).context("解析 config.toml 失败")?,
-            Err(_) => Config::default(),
+            // 文件不存在 = 全新安装,用默认值;文件存在但读不了
+            // (编码损坏/权限/占用)必须大声报错,否则静默回退默认配置
+            // 会出现"明明填了 key 却提示未配置"这类难排查的问题。
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Config::default(),
+            Err(e) => {
+                return Err(e).context(
+                    "读取 config.toml 失败(文件需为 UTF-8 编码,勿用记事本另存为 ANSI/GBK)",
+                );
+            }
         };
         if cfg.deepseek.api_key.trim().is_empty()
             && let Ok(key) = std::env::var("DEEPSEEK_API_KEY")
@@ -166,5 +179,36 @@ mod tests {
         assert_eq!(cfg.models.asr_dir, PathBuf::from("assets/models/asr-zh"));
         assert_eq!(cfg.brain.agent.timeout_secs, 120);
         assert!(cfg.deepseek.base_url.contains("deepseek"));
+    }
+
+    /// 回归: config.toml 存在但编码损坏(非 UTF-8)时必须报错,
+    /// 不能静默回退默认配置(否则"填了 key 却提示未配置"极难排查)。
+    #[test]
+    fn corrupted_config_is_loud_error_not_silent_default() {
+        let dir = std::env::temp_dir().join(format!("voxelf-cfg-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        // GBK 编码的"配置"字节(非 UTF-8)
+        let gbk: Vec<u8> = vec![0xC5, 0xE4, 0xD6, 0xC3, 0x0A];
+        std::fs::write(&path, &gbk).unwrap();
+        let r = Config::load_from(&path);
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(r.is_err(), "损坏配置应报错而非静默回退默认: {r:?}");
+        let msg = format!("{:#}", r.unwrap_err());
+        assert!(msg.contains("config.toml"), "错误应指明配置文件: {msg}");
+    }
+
+    /// 回归: config.toml 不存在(全新安装)仍应回退默认值,不报错。
+    #[test]
+    fn missing_config_falls_back_to_defaults() {
+        let dir = std::env::temp_dir().join(format!("voxelf-cfg-none-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let r = Config::load_from(&path);
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(r.is_ok(), "缺配置应回退默认: {r:?}");
+        let cfg = r.unwrap();
+        assert_eq!(cfg.brain.kind, "deepseek");
+        assert!(cfg.deepseek.api_key.is_empty());
     }
 }
