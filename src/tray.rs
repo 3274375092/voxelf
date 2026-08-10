@@ -365,6 +365,35 @@ mod tests {
         assert_eq!(s.feedback.as_ref().map(|(t, _)| t.as_str()), Some("已显示"));
     }
 
+    /// 完整流程(真实 apply_action): 锁定/置顶开关更新共享状态并给出反馈。
+    /// 注意: 锁保护在断言后必须 drop,std Mutex 不可重入,持锁跨
+    /// apply_action 调用会自死锁(apply_action 内部会再次 lock 同一把锁)。
+    #[test]
+    fn tray_lock_and_topmost_toggle_via_apply_action() {
+        let ctx = egui::Context::default();
+        let state = SharedTrayState::default();
+        // 锁定: false → true
+        apply_action(&ctx, &state, TrayAction::ToggleLock);
+        {
+            let s = state.lock().unwrap();
+            assert!(s.locked, "锁定开关应生效");
+            assert_eq!(s.feedback.as_ref().map(|(t, _)| t.as_str()), Some("已锁定位置"));
+        } // drop 守卫,否则下一次 apply_action 自死锁
+        // 置顶: false → true
+        apply_action(&ctx, &state, TrayAction::ToggleTopmost);
+        {
+            let s = state.lock().unwrap();
+            assert!(s.topmost, "置顶开关应生效");
+            assert_eq!(s.feedback.as_ref().map(|(t, _)| t.as_str()), Some("已置顶"));
+        }
+        // 再点一次锁定 → 解锁
+        apply_action(&ctx, &state, TrayAction::ToggleLock);
+        {
+            let s = state.lock().unwrap();
+            assert!(!s.locked, "再点一次应解锁");
+        }
+    }
+
     /// 开机自启注册表往返: 写入 → 读回 true → 删除 → 读回 false。
     /// 测试结束恢复原状,不影响用户设置。
     #[test]
