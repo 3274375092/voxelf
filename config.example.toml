@@ -1,0 +1,30 @@
+# voxelf 配置文件。复制本文件为 config.toml 并填入 DEEPSEEK_API_KEY,
+# 或者直接设置环境变量 DEEPSEEK_API_KEY。
+
+[deepseek]
+# 留空则读取环境变量 DEEPSEEK_API_KEY
+api_key = ""
+base_url = "https://api.deepseek.com"
+model = "deepseek-chat"
+system_prompt = """你是一个住在像素世界里的可爱小精灵伙伴,名字叫 Vox。用简短、口语化的中文回复,每次不超过 3 句话。语气活泼、温暖、有点俏皮。回复是要被语音合成朗读出来的,不要使用列表、markdown 符号或表情符号。"""
+
+[brain]
+# deepseek | agent(实验性,通过子进程调用 jcode/pi)
+kind = "deepseek"
+
+[brain.agent]
+command = "jcode"
+workdir = "."
+
+[models]
+asr_dir = "assets/models/asr-zh-14m"
+vad_model = "assets/models/vad/silero_vad.onnx"
+tts_dir = "assets/models/kokoro"
+tts_model_file = "model.int8.onnx"
+tts_voice = "xiaoxiao"   # xiaobei | xiaoni | xiaoxiao | xiaoyi
+asr_threads = 2
+tts_threads = 2
+
+[ui]
+window_width = 960
+window_height = 600

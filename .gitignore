@@ -1,0 +1,10 @@
+/target
+/config.toml
+/assets/models
+/assets/fonts
+*.png
+_*.json
+_*.rs
+_src/
+_*.crate
+smoke_*.png
