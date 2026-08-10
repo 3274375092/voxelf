@@ -7,7 +7,7 @@ use std::sync::Arc;
 use eframe::egui;
 
 use crate::state::{Phase, SharedState, UiState};
-use crate::tray::{Tray, TrayAction};
+use crate::tray::{SharedTrayState, Tray, TrayAction, TrayState};
 use crate::ui::kaomoji;
 
 /// 桌宠窗口尺寸(32x32 网格 x 10px)
@@ -18,17 +18,11 @@ pub struct VoxApp {
     state: SharedState,
     t: f64,
     tray: Option<Tray>,
-    /// 事件转发线程 → UI 的动作通道(不依赖 eframe 帧循环)
-    tray_rx: Option<flume::Receiver<TrayAction>>,
-    locked: bool,
-    topmost: bool,
-    quitting: bool,
-    /// 自维护可见性(不读 viewport 报告: 隐藏后 viewport 报 stale,依赖它无法恢复)
-    visible: bool,
-    /// 托盘动作反馈(字幕短暂显示,确认命令生效)
-    feedback: Option<(String, f64)>,
-    /// 上次处理的托盘动作(去抖用: Windows 一次点击产生 2 个 MenuEvent)
-    last_action: Option<(TrayAction, f64)>,
+    /// 托盘共享状态(forwarder 线程直接更新,UI 只读)
+    tray_state: Option<SharedTrayState>,
+    /// 诊断: 帧计数与日志时间
+    frames: u64,
+    last_fps_log: f64,
 }
 
 /// 字幕文本截断: 超过 max_chars 字符截断并加省略号(纯函数,可测试)。
@@ -43,24 +37,34 @@ fn subtitle_text(text: &str, max_chars: usize) -> String {
 }
 
 impl VoxApp {
-    pub fn new(state: SharedState, tray: Option<Tray>, tray_rx: Option<flume::Receiver<TrayAction>>) -> Self {
+    pub fn new(state: SharedState, tray: Option<Tray>, tray_state: Option<SharedTrayState>) -> Self {
         Self {
             state,
             t: 0.0,
             tray,
-            tray_rx,
-            locked: false,
-            topmost: true,
-            quitting: false,
-            visible: true,
-            feedback: None,
-            last_action: None,
+            tray_state,
+            frames: 0,
+            last_fps_log: 0.0,
         }
     }
 
-    /// 显示 2 秒反馈字幕(托盘动作确认)
-    fn set_feedback(&mut self, msg: impl Into<String>) {
-        self.feedback = Some((msg.into(), self.t));
+    /// 读托盘共享状态快照(无托盘时返回默认)
+    fn tray_snapshot(&self) -> TrayState {
+        self.tray_state
+            .as_ref()
+            .map(|s| s.lock().expect("tray state 锁").clone())
+            .unwrap_or_default()
+    }
+
+    /// 诊断: 每秒记录一次帧率(确认自维持重绘是否工作)
+    fn log_fps(&mut self) {
+        self.frames += 1;
+        if self.t - self.last_fps_log >= 1.0 {
+            let dt = (self.t - self.last_fps_log).max(0.001);
+            tracing::info!("DIAG 帧率: {:.0} fps", self.frames as f64 / dt);
+            self.frames = 0;
+            self.last_fps_log = self.t;
+        }
     }
 
     fn phase_color(phase: Phase) -> egui::Color32 {
@@ -326,12 +330,12 @@ impl VoxApp {
         }
 
         // ---- 字幕(屏幕内底部,贴底向上生长,层级最高) ----
-        // 托盘动作反馈优先显示 2 秒
-        let text = if let Some((msg, at)) = &self.feedback {
-            if self.t - *at < 2.0 {
+        // 托盘动作反馈优先显示 2 秒(状态来自共享,forwarder 线程写入)
+        let tray = self.tray_snapshot();
+        let text = if let Some((msg, at)) = &tray.feedback {
+            if at.elapsed().as_secs_f64() < 2.0 {
                 msg.clone()
             } else {
-                self.feedback = None;
                 self.status_text(&st)
             }
         } else {
@@ -414,9 +418,10 @@ impl VoxApp {
             egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), (10.0 + 14.0 * breathe) as u8),
         );
 
-        // 拖动: 按住电视区域移动窗口(锁定时不响应)
+        // 拖动: 按住电视区域移动窗口(锁定时不响应;锁定状态来自托盘共享)
         let ctx = ui.ctx().clone();
-        if !self.locked {
+        let locked = self.tray_snapshot().locked;
+        if !locked {
             let pointer = ui.input(|i| i.pointer.hover_pos());
             let pressed = ui.input(|i| i.pointer.primary_pressed());
             if pressed && pointer.is_some_and(|p| tv.contains(p)) {
@@ -434,85 +439,32 @@ impl eframe::App for VoxApp {
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
         let dt = ctx.input(|i| i.stable_dt).min(0.1) as f64;
         self.t += dt;
-        self.handle_tray(ctx);
+        self.log_fps();
+        // 同步托盘菜单勾选状态(主线程;tray-icon !Send 不能跨线程)
+        if let Some(t) = &self.tray {
+            let s = self.tray_snapshot();
+            t.sync(s.locked, s.topmost, s.autostart);
+        }
         // 关闭窗口(Alt+F4/系统关闭)→ 隐藏到托盘而非退出;托盘"退出"放行
         if ctx.input(|i| i.viewport().close_requested()) {
-            if self.quitting {
+            let quitting = self.tray_snapshot().quitting;
+            if quitting {
                 return; // 放行,让 eframe 正常退出
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            self.visible = false;
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // 可见帧也维持持续重绘(自维持动画/事件帧循环,否则休眠后要等鼠标事件)
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
-        // 可见帧同样处理托盘命令(与 logic 幂等)
-        self.handle_tray(ui.ctx());
         // Esc → 隐藏到托盘
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.visible = false;
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
             return;
         }
         self.draw_pet(ui);
-    }
-}
-
-impl VoxApp {
-    /// 处理托盘动作(由事件转发线程捕获,经 channel 送达;不依赖帧循环)
-    fn handle_tray(&mut self, ctx: &egui::Context) {
-        // 收动作(先取出,避免 self 借用冲突)
-        let tray_action = self.tray_rx.as_ref().and_then(|rx| rx.try_recv().ok());
-        if let Some(action) = tray_action {
-            // 去抖: Windows 一次点击会产生 2 个 MenuEvent,忽略 150ms 内重复
-            if !should_accept_action(self.last_action, action, self.t, 0.15) {
-                tracing::debug!("托盘: 忽略重复事件 {:?}", action);
-                return;
-            }
-            self.last_action = Some((action, self.t));
-            if let Some(t) = self.tray.as_ref() {
-                t.sync_checked(action);
-                t.sync(self.locked, self.topmost);
-            }
-            match action {
-                TrayAction::ToggleVisible => {
-                    // 自维护状态取反(隐藏后 viewport 报告 stale,不能依赖它)
-                    self.visible = toggle_visible(self.visible);
-                    tracing::info!("托盘: 切换可见性 → {}", self.visible);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.visible));
-                }
-                TrayAction::ToggleLock => {
-                    self.locked = !self.locked;
-                    tracing::info!("托盘: 锁定位置 = {}", self.locked);
-                    self.set_feedback(if self.locked { "已锁定位置" } else { "已解锁" });
-                }
-                TrayAction::ToggleTopmost => {
-                    self.topmost = !self.topmost;
-                    let level = if self.topmost {
-                        egui::WindowLevel::AlwaysOnTop
-                    } else {
-                        egui::WindowLevel::Normal
-                    };
-                    tracing::info!("托盘: 置顶 = {}", self.topmost);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
-                    self.set_feedback(if self.topmost { "已置顶" } else { "取消置顶" });
-                }
-                TrayAction::ToggleAutostart => {
-                    let on = crate::tray::is_autostart();
-                    tracing::info!("托盘: 开机自启 = {on}");
-                    self.set_feedback(if on { "已开启开机自启" } else { "已关闭开机自启" });
-                }
-                TrayAction::Quit => {
-                    // 标记真正退出,放行 close(否则被 close_requested 拦截成隐藏)
-                    tracing::info!("托盘: 退出");
-                    self.quitting = true;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
-        }
     }
 }
 
@@ -542,8 +494,7 @@ pub fn run_ui(state: SharedState) -> eframe::Result<()> {
     if tray.is_none() {
         tracing::warn!("托盘初始化失败,继续无托盘运行");
     }
-    // 事件转发线程: 托盘事件不依赖 eframe 帧循环,独立线程捕获 + 唤醒
-    let (tray_tx, tray_rx) = flume::unbounded::<TrayAction>();
+    let tray_state: SharedTrayState = std::sync::Arc::new(std::sync::Mutex::new(TrayState::default()));
     let viewport = egui::ViewportBuilder::default()
         .with_title("voxelf - 语音像素伙伴")
         .with_inner_size([PET_W, PET_H])
@@ -561,13 +512,10 @@ pub fn run_ui(state: SharedState) -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             setup_fonts(&cc.egui_ctx);
-            // 独立线程捕获托盘事件(不依赖帧循环,窗口休眠也能即时响应)
-            let wake = {
-                let ctx = cc.egui_ctx.clone();
-                move || ctx.request_repaint()
-            };
-            crate::tray::spawn_event_forwarder(tray_tx, wake);
-            Ok(Box::new(VoxApp::new(state, tray, Some(tray_rx))))
+            // 独立线程: 捕获托盘事件后**直接执行**(跨线程发窗口命令),
+            // 完全绕开 eframe 帧循环(实测跨线程 request_repaint 唤不醒窗口)
+            crate::tray::spawn_event_forwarder(cc.egui_ctx.clone(), tray_state.clone());
+            Ok(Box::new(VoxApp::new(state, tray, Some(tray_state))))
         }),
     )
 }

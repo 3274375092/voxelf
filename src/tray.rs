@@ -1,5 +1,7 @@
 ﻿//! 系统托盘(Windows): 托盘图标 + 菜单(显示/锁定/置顶/自启/退出)。
-//! 事件通过全局 channel 在 UI 帧里 poll,与 eframe 事件循环解耦。
+//! 事件通过独立线程捕获并**直接执行**(不依赖 eframe 帧循环)。
+
+use eframe::egui;
 
 /// 托盘菜单动作(UI 每帧 poll 执行)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,28 +108,97 @@ pub fn is_autostart() -> bool {
     hkcu.get_value::<String, _>(AUTOSTART_NAME).is_ok()
 }
 
-/// 独立线程: 持续轮询托盘/菜单事件,立即转发到 channel 并唤醒 eframe。
-/// 不依赖 eframe 帧循环 —— 窗口隐藏或休眠时也能即时捕获事件,
-/// 否则事件要等鼠标移动触发重绘才被处理(实测延迟)。
-pub fn spawn_event_forwarder(
-    tx: flume::Sender<TrayAction>,
-    wake: impl Fn() + Send + Sync + 'static,
-) {
+/// 托盘动作反馈(字幕短暂显示,确认命令生效)
+pub type SharedTrayState = std::sync::Arc<std::sync::Mutex<TrayState>>;
+
+/// 托盘/UI 共享状态(forwarder 线程直接更新,UI 每帧读取)。
+/// 不依赖 eframe 帧循环: 事件在独立线程立即执行窗口命令。
+#[derive(Debug, Clone, Default)]
+pub struct TrayState {
+    pub locked: bool,
+    pub topmost: bool,
+    pub visible: bool,
+    pub quitting: bool,
+    /// 开机自启状态(菜单勾选同步用)
+    pub autostart: bool,
+    /// 动作反馈(文本, 到达时间)
+    pub feedback: Option<(String, std::time::Instant)>,
+    /// 上次动作(去抖: Windows 一次点击产生 2 个 MenuEvent)
+    pub last_action: Option<(TrayAction, std::time::Instant)>,
+}
+
+/// 独立线程: 持续轮询托盘/菜单事件,捕获后**直接执行动作**
+/// (窗口命令跨线程发送,egui Context 线程安全),完全绕开 eframe 帧循环。
+/// 实测: request_repaint 跨线程唤醒在 eframe 0.36 + Windows 上失效,
+/// 事件要等鼠标移动触发帧才被处理; 这里改为直接执行,零延迟。
+pub fn spawn_event_forwarder(ctx: egui::Context, state: SharedTrayState) {
     std::thread::spawn(move || loop {
         if let Ok(ev) = muda::MenuEvent::receiver().try_recv() {
             if let Some(a) = action_for_id(ev.id.0.as_str()) {
-                let _ = tx.send(a);
-                wake();
+                tracing::info!("DIAG 转发菜单事件: {:?} (id={})", a, ev.id.0);
+                apply_action(&ctx, &state, a);
             }
         }
         if let Ok(ev) = tray_icon::TrayIconEvent::receiver().try_recv()
             && matches!(ev, tray_icon::TrayIconEvent::DoubleClick { .. })
         {
-            let _ = tx.send(TrayAction::ToggleVisible);
-            wake();
+            tracing::info!("DIAG 转发双击事件");
+            apply_action(&ctx, &state, TrayAction::ToggleVisible);
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     });
+}
+
+/// 执行托盘动作(在独立线程,直接生效,不等 UI 帧)。
+/// 注意: tray-icon/muda 是 !Send,菜单勾选状态由主线程 UI 帧同步。
+fn apply_action(ctx: &egui::Context, state: &SharedTrayState, action: TrayAction) {
+    let mut s = state.lock().expect("tray state 锁");
+    let now = std::time::Instant::now();
+    // 去抖: Windows 一次菜单点击会产生 2 个 MenuEvent
+    if let Some((a, at)) = s.last_action {
+        if a == action && now.duration_since(at).as_millis() < 150 {
+            tracing::debug!("托盘: 忽略重复事件 {:?}", action);
+            return;
+        }
+    }
+    s.last_action = Some((action, now));
+
+    match action {
+        TrayAction::ToggleVisible => {
+            s.visible = !s.visible;
+            tracing::info!("托盘: 切换可见性 → {}", s.visible);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(s.visible));
+            s.feedback = Some((if s.visible { "已显示".to_string() } else { "已隐藏到托盘".to_string() }, std::time::Instant::now()));
+        }
+        TrayAction::ToggleLock => {
+            s.locked = !s.locked;
+            tracing::info!("托盘: 锁定位置 = {}", s.locked);
+            s.feedback = Some((if s.locked { "已锁定位置".to_string() } else { "已解锁".to_string() }, std::time::Instant::now()));
+        }
+        TrayAction::ToggleTopmost => {
+            s.topmost = !s.topmost;
+            let level = if s.topmost {
+                egui::WindowLevel::AlwaysOnTop
+            } else {
+                egui::WindowLevel::Normal
+            };
+            tracing::info!("托盘: 置顶 = {}", s.topmost);
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+            s.feedback = Some((if s.topmost { "已置顶".to_string() } else { "取消置顶".to_string() }, std::time::Instant::now()));
+        }
+        TrayAction::ToggleAutostart => {
+            let on = !is_autostart();
+            let _ = set_autostart(on);
+            s.autostart = on;
+            tracing::info!("托盘: 开机自启 = {on}");
+            s.feedback = Some((if on { "已开启开机自启".to_string() } else { "已关闭开机自启".to_string() }, std::time::Instant::now()));
+        }
+        TrayAction::Quit => {
+            tracing::info!("托盘: 退出");
+            s.quitting = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
 }
 
 impl Tray {
@@ -166,31 +237,16 @@ impl Tray {
         })
     }
 
-    /// 动作已由事件转发线程捕获;此处同步菜单勾选状态与注册表。
-    pub fn sync_checked(&self, action: TrayAction) {
-        match action {
-            TrayAction::ToggleLock => {
-                self.lock_item.set_checked(!self.lock_item.is_checked());
-            }
-            TrayAction::ToggleTopmost => {
-                self.topmost_item.set_checked(!self.topmost_item.is_checked());
-            }
-            TrayAction::ToggleAutostart => {
-                let next = !self.autostart_item.is_checked();
-                let _ = set_autostart(next);
-                self.autostart_item.set_checked(next);
-            }
-            _ => {}
-        }
-    }
-
-    /// 同步 UI 侧状态到菜单(锁定/置顶被 UI 改变时)
-    pub fn sync(&self, locked: bool, topmost: bool) {
+    /// 同步 UI 侧状态到菜单勾选(主线程调用;tray-icon/muda 是 !Send)
+    pub fn sync(&self, locked: bool, topmost: bool, autostart: bool) {
         if self.lock_item.is_checked() != locked {
             self.lock_item.set_checked(locked);
         }
         if self.topmost_item.is_checked() != topmost {
             self.topmost_item.set_checked(topmost);
+        }
+        if self.autostart_item.is_checked() != autostart {
+            self.autostart_item.set_checked(autostart);
         }
     }
 
