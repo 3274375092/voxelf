@@ -83,29 +83,27 @@ voxelf/
     ├── asr.rs             # sherpa-onnx 流式识别 + VAD
     ├── tts.rs             # sherpa-onnx Kokoro 合成
     ├── brain/
-    │   ├── mod.rs         # Brain trait(事件流)
+    │   ├── mod.rs         # BrainEvent 事件流 + BrainKind 分发
     │   ├── deepseek.rs    # SSE 流式聊天
-    │   └── agent.rs       # 二期:jcode/pi 子进程适配
+    │   ├── agent.rs       # 常驻 jcode repl 进程适配(行解析/超时/重启)
+    │   └── hybrid.rs      # 双层大脑: 规则意图分流 → DeepSeek 或 agent
     ├── state.rs           # 状态机 + 事件总线
     └── ui/
         ├── app.rs         # macroquad 主循环
         └── sprite.rs      # 像素动画播放器
 ```
 
-## 6. Agent 接入设计(二期)
+## 6. Agent 接入(已实现:双层大脑)
 
 ```rust
-#[async_trait]
-trait Brain {
-    async fn chat(&mut self, text: &str) -> Vec<BrainEvent>;
-}
-
-enum BrainEvent { Delta(String), Thinking(String), Action(String), Done(String) }
+enum BrainEvent { Delta(String), Done(String), Err(String), Working(String) }
 ```
 
-- jcode 已确认有 headless 模式:`jcode run "say hello"`。
-- `agent.rs` 用 `tokio::process::Command` 起子进程,stdin 喂指令,stdout 流式解析 `thinking / action / result` 事件 → 分别映射到小人动画和 TTS。
-- Brain trait 同时被 DeepSeek 和 agent 实现,UI/音频层不感知差异。二期甚至可做**双模式**:先问 agent"这是个操作类请求",是则进 Working 态。
+- **常驻 `jcode repl` 进程**(无 TUI 的简单 REPL):voxelf 启动后 lazily spawn 一次,每轮请求写一行 stdin、按行读 stdout。**实测首轮 1.29s、第二轮 1.02s**,对比 `jcode run` 冷启动 6.1s(其中 5.3s 是固定进程初始化,与工具数/provider/socket 无关),提速约 5 倍。
+- **输出行解析**(`classify`):banner / `[Tokens]` 元信息 / `[工具名] 参数`(→ Working 事件)/ ` → 工具结果回显`(不朗读)/ `> 正文`(→ Delta)分门别类;轮结束判定 = 空 prompt 或 `[Tokens]` 后双空行(工具轮中间的 `[Tokens]` 后只有单空行,不会误断)。
+- **双层分流**(`hybrid.rs`):纯规则意图判断(零延迟零成本),命中"操作类"词表(帮我写/删/整理/下载/打开/运行… + 动作词×对象词组合)走 agent,否则走 DeepSeek(首字 0.5s)。jcode 未安装或 `agent.enabled=false` 自动降级为纯 DeepSeek。
+- **安全**:默认 `--tool-profile minimal`(只读工具集),或 `--tools read,write,edit` 白名单;`timeout_secs` 超时自动杀进程重启。操作类请求 token 成本 2~4k input(工具白名单后),约闲聊 3~4 倍。
+- Brain trait 同时被 DeepSeek、Agent、Hybrid 实现,UI/音频层不感知差异。
 
 ## 7. 里程碑(按序交付)
 
@@ -115,8 +113,9 @@ enum BrainEvent { Delta(String), Thinking(String), Action(String), Done(String) 
 | M1 | cpal 采集 → sherpa-onnx 流式 ASR → 终端打印识别文本 | 1–2 天 |
 | M2 | + DeepSeek API + TTS + 播放,终端闭环跑通 | 1 天 |
 | M3 | 状态机 + 各阶段动画 + 波形可视化 | 1–2 天 |
-| M4 | Brain trait 拆分 + jcode/pi 子进程适配(Working 动画) | 2–3 天 |
+| M4 | Brain 拆分 + jcode repl 常驻适配(Working 动画,双层大脑) | ✅ 完成 |
 | M5 | 语音打断(barge-in)、上下文记忆、情绪系统、打包分发 | 2–3 天 |
+| M6 | agent 输出清洗(markdown/代码块→口语化)、意图判断升级(LLM 双保险)、工具链扩展 | 1–2 天 |
 
 ## 8. 风险与对策
 
