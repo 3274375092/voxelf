@@ -15,7 +15,7 @@ mod tests {
             // 候选颜文字字符(半角假名/符号/日文假名)
             for ch in ['｡', '･', 'ω', 'ㅅ', 'ㅂ', '▽', '≧', '≦', '；', '｀', '´', '・', 'ゝ', 'ゞ', 'へ', 'ノ', '°', 'ヽ', 'ヾ', '_', '^', 'o', 'O', 'T', '(', ')', '0', '3', '9', '>', '<', '☆', '★'] {
                 let idx = font.lookup_glyph_index(ch);
-                let (m, bmp) = font.rasterize(ch, 48.0);
+                let (_m, bmp) = font.rasterize(ch, 48.0);
                 let ink = bmp.iter().filter(|&&b| b > 0).count();
                 let ok = if ink > 0 { "OK " } else { "MISS" };
                 println!("  {ok} '{ch}' U+{:04X} idx={idx} ink={ink}", ch as u32);

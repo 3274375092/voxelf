@@ -7,7 +7,7 @@ use std::sync::Arc;
 use eframe::egui;
 
 use crate::state::{Phase, SharedState, UiState};
-use crate::tray::{SharedTrayState, Tray, TrayAction, TrayState};
+use crate::tray::{SharedTrayState, Tray, TrayState};
 use crate::ui::kaomoji;
 
 /// 桌宠窗口尺寸(32x32 网格 x 10px)
@@ -509,44 +509,12 @@ fn toggle_visible(current: bool) -> bool {
     !current
 }
 
-#[allow(dead_code)] // 测试用纯函数
-/// 事件去抖: 同动作在 debounce 秒内重复到达则忽略。
-/// 复现: Windows 上一次菜单点击会产生 2 个 MenuEvent,导致动作双触发。
-fn should_accept_action(
-    last: Option<(TrayAction, f64)>,
-    action: TrayAction,
-    now: f64,
-    debounce: f64,
-) -> bool {
-    match last {
-        Some((a, at)) => !(a == action && now - at < debounce),
-        None => true,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::should_accept_action;
     use super::subtitle_text;
     use super::toggle_visible;
     use super::VoxApp;
     use crate::state::Phase;
-    use crate::tray::TrayAction;
-
-    /// 事件去抖: 同动作 150ms 内重复忽略(Windows 一次点击双事件),
-    /// 不同动作 / 超时后接受。
-    #[test]
-    fn debounce_ignores_duplicate_events() {
-        let a = TrayAction::ToggleVisible;
-        let b = TrayAction::ToggleLock;
-        assert!(should_accept_action(None, a, 0.0, 0.15), "首次应接受");
-        // 同动作 100ms 内重复 → 忽略
-        assert!(!should_accept_action(Some((a, 0.0)), a, 0.1, 0.15));
-        // 超时后同动作 → 接受
-        assert!(should_accept_action(Some((a, 0.0)), a, 0.2, 0.15));
-        // 不同动作 → 立即接受
-        assert!(should_accept_action(Some((a, 0.05)), b, 0.06, 0.15));
-    }
 
     /// 复现测试: 窗口隐藏后,eframe 只调用 logic 层,不再调用 ui 层。
     /// 若托盘事件处理只放在 ui() 里,隐藏后"显示"命令永远无法处理 —— 界面无法恢复。
@@ -585,12 +553,11 @@ mod tests {
     #[test]
     fn hidden_viewport_reports_stale_visible() {
         let mut app_visible = true; // App 自维护状态
-        let mut viewport_visible = true; // 模拟 eframe viewport 报告
+        // 模拟 eframe viewport 报告: 窗口隐藏后冻结,仍报 true(stale)
+        let viewport_visible = true;
         // 第一次点击: 隐藏
         app_visible = toggle_visible(app_visible);
         assert!(!app_visible, "第一次点击后应隐藏");
-        // 窗口隐藏后,viewport 报告冻结(仍报 true,不再更新)
-        viewport_visible = true; // stale
         // 第二次点击: 若依赖 viewport 读取 → 错误地取反为 false(再次隐藏)
         let wrong = toggle_visible(viewport_visible);
         assert!(!wrong, "依赖 stale viewport 报告无法恢复显示");
@@ -631,7 +598,6 @@ mod tests {
             Phase::Speaking, Phase::Working, Phase::Error,
         ] {
             let _ = VoxApp::phase_color(ph);
-            let _ = ph.label();
         }
     }
 }

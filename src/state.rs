@@ -10,19 +10,6 @@ pub enum Phase {
     Error,
 }
 
-impl Phase {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Phase::Idle => "待机",
-            Phase::Listening => "聆听",
-            Phase::Thinking => "思考",
-            Phase::Speaking => "说话",
-            Phase::Working => "干活",
-            Phase::Error => "出错",
-        }
-    }
-}
-
 /// 所有线程共享的 UI 状态。由音频/ASR/大脑/TTS 线程写入,UI 每帧读取。
 #[derive(Debug, Clone, Default)]
 pub struct UiState {
@@ -47,9 +34,3 @@ impl Default for Phase {
 }
 
 pub type SharedState = Arc<Mutex<UiState>>;
-
-pub fn set_phase(state: &SharedState, phase: Phase) {
-    if let Ok(mut s) = state.lock() {
-        s.phase = phase;
-    }
-}

@@ -30,6 +30,20 @@ pub fn action_for_id(id: &str) -> Option<TrayAction> {
     }
 }
 
+/// 事件去抖(纯函数,可测试): 同动作在 debounce 内重复到达则忽略。
+/// 复现: Windows 上一次菜单点击会产生 2 个 MenuEvent,导致动作双触发。
+pub fn should_accept_action(
+    last: Option<(TrayAction, std::time::Instant)>,
+    action: TrayAction,
+    now: std::time::Instant,
+    debounce: std::time::Duration,
+) -> bool {
+    match last {
+        Some((a, at)) => !(a == action && now.duration_since(at) < debounce),
+        None => true,
+    }
+}
+
 pub struct Tray {
     _icon: tray_icon::TrayIcon,
     menu: muda::Menu,
@@ -155,10 +169,7 @@ fn apply_action(ctx: &egui::Context, state: &SharedTrayState, action: TrayAction
     let mut s = state.lock().expect("tray state 锁");
     let now = std::time::Instant::now();
     // 去抖: Windows 一次菜单点击会产生 2 个 MenuEvent
-    if let Some((a, at)) = s.last_action
-        && a == action
-        && now.duration_since(at).as_millis() < 150
-    {
+    if !should_accept_action(s.last_action, action, now, std::time::Duration::from_millis(150)) {
         tracing::debug!("托盘: 忽略重复事件 {:?}", action);
         return;
     }
@@ -271,6 +282,39 @@ mod tests {
         assert_eq!(action_for_id("quit"), Some(TrayAction::Quit));
         assert_eq!(action_for_id("unknown"), None);
         assert_eq!(action_for_id(""), None);
+    }
+
+    /// 事件去抖: 同动作 150ms 内重复忽略(Windows 一次点击双事件),
+    /// 不同动作 / 超时后接受。生产路径 apply_action 使用同一函数。
+    #[test]
+    fn debounce_ignores_duplicate_events() {
+        use std::time::{Duration, Instant};
+        let a = TrayAction::ToggleVisible;
+        let b = TrayAction::ToggleLock;
+        let debounce = Duration::from_millis(150);
+        let t0 = Instant::now();
+        assert!(should_accept_action(None, a, t0, debounce), "首次应接受");
+        // 同动作 100ms 内重复 → 忽略
+        assert!(!should_accept_action(
+            Some((a, t0)),
+            a,
+            t0 + Duration::from_millis(100),
+            debounce
+        ));
+        // 超时后同动作 → 接受
+        assert!(should_accept_action(
+            Some((a, t0)),
+            a,
+            t0 + Duration::from_millis(200),
+            debounce
+        ));
+        // 不同动作 → 立即接受
+        assert!(should_accept_action(
+            Some((a, t0 + Duration::from_millis(50))),
+            b,
+            t0 + Duration::from_millis(60),
+            debounce
+        ));
     }
 
     /// 开机自启注册表往返: 写入 → 读回 true → 删除 → 读回 false。
