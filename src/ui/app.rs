@@ -27,6 +27,8 @@ pub struct VoxApp {
     visible: bool,
     /// 托盘动作反馈(字幕短暂显示,确认命令生效)
     feedback: Option<(String, f64)>,
+    /// 上次处理的托盘动作(去抖用: Windows 一次点击产生 2 个 MenuEvent)
+    last_action: Option<(TrayAction, f64)>,
 }
 
 /// 字幕文本截断: 超过 max_chars 字符截断并加省略号(纯函数,可测试)。
@@ -52,6 +54,7 @@ impl VoxApp {
             quitting: false,
             visible: true,
             feedback: None,
+            last_action: None,
         }
     }
 
@@ -444,6 +447,8 @@ impl eframe::App for VoxApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 可见帧也维持持续重绘(自维持动画/事件帧循环,否则休眠后要等鼠标事件)
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
         // 可见帧同样处理托盘命令(与 logic 幂等)
         self.handle_tray(ui.ctx());
         // Esc → 隐藏到托盘
@@ -462,6 +467,12 @@ impl VoxApp {
         // 收动作(先取出,避免 self 借用冲突)
         let tray_action = self.tray_rx.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(action) = tray_action {
+            // 去抖: Windows 一次点击会产生 2 个 MenuEvent,忽略 150ms 内重复
+            if !should_accept_action(self.last_action, action, self.t, 0.15) {
+                tracing::debug!("托盘: 忽略重复事件 {:?}", action);
+                return;
+            }
+            self.last_action = Some((action, self.t));
             if let Some(t) = self.tray.as_ref() {
                 t.sync_checked(action);
                 t.sync(self.locked, self.topmost);
@@ -566,12 +577,43 @@ fn toggle_visible(current: bool) -> bool {
     !current
 }
 
+/// 事件去抖: 同动作在 debounce 秒内重复到达则忽略。
+/// 复现: Windows 上一次菜单点击会产生 2 个 MenuEvent,导致动作双触发。
+fn should_accept_action(
+    last: Option<(TrayAction, f64)>,
+    action: TrayAction,
+    now: f64,
+    debounce: f64,
+) -> bool {
+    match last {
+        Some((a, at)) => !(a == action && now - at < debounce),
+        None => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::should_accept_action;
     use super::subtitle_text;
     use super::toggle_visible;
     use super::VoxApp;
     use crate::state::Phase;
+    use crate::tray::TrayAction;
+
+    /// 事件去抖: 同动作 150ms 内重复忽略(Windows 一次点击双事件),
+    /// 不同动作 / 超时后接受。
+    #[test]
+    fn debounce_ignores_duplicate_events() {
+        let a = TrayAction::ToggleVisible;
+        let b = TrayAction::ToggleLock;
+        assert!(should_accept_action(None, a, 0.0, 0.15), "首次应接受");
+        // 同动作 100ms 内重复 → 忽略
+        assert!(!should_accept_action(Some((a, 0.0)), a, 0.1, 0.15));
+        // 超时后同动作 → 接受
+        assert!(should_accept_action(Some((a, 0.0)), a, 0.2, 0.15));
+        // 不同动作 → 立即接受
+        assert!(should_accept_action(Some((a, 0.05)), b, 0.06, 0.15));
+    }
 
     /// 复现测试: 窗口隐藏后,eframe 只调用 logic 层,不再调用 ui 层。
     /// 若托盘事件处理只放在 ui() 里,隐藏后"显示"命令永远无法处理 —— 界面无法恢复。
