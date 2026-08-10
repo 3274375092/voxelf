@@ -22,16 +22,16 @@ const JOBS = [
     resume: true,
   },
   {
-    name: 'ASR zipformer zh-14M (int8)',
-    base: `${MIRROR}/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/resolve/main/`,
+    name: 'ASR zipformer zh (int8, 2025-06-30)',
+    base: `${MIRROR}/csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/resolve/main/`,
     files: [
-      'encoder-epoch-99-avg-1.int8.onnx',
-      'decoder-epoch-99-avg-1.int8.onnx',
-      'joiner-epoch-99-avg-1.int8.onnx',
+      'encoder.int8.onnx',
+      'decoder.onnx',
+      'joiner.int8.onnx',
       'tokens.txt',
       'test_wavs/0.wav',
     ],
-    dest: 'assets/models/asr-zh-14m',
+    dest: 'assets/models/asr-zh',
   },
   {
     name: 'VAD silero',

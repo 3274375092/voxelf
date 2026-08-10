@@ -17,7 +17,7 @@ command = "jcode"
 workdir = "."
 
 [models]
-asr_dir = "assets/models/asr-zh-14m"
+asr_dir = "assets/models/asr-zh"
 vad_model = "assets/models/vad/silero_vad.onnx"
 tts_dir = "assets/models/kokoro"
 tts_model_file = "model.int8.onnx"

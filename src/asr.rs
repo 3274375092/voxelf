@@ -31,9 +31,9 @@ impl Asr {
         let asr_dir = cfg.asr_dir.as_os_str().to_string_lossy().into_owned();
         let mut model = OnlineModelConfig::default();
         model.transducer = OnlineTransducerModelConfig {
-            encoder: Some(format!("{asr_dir}/encoder-epoch-99-avg-1.int8.onnx")),
-            decoder: Some(format!("{asr_dir}/decoder-epoch-99-avg-1.int8.onnx")),
-            joiner: Some(format!("{asr_dir}/joiner-epoch-99-avg-1.int8.onnx")),
+            encoder: Some(format!("{asr_dir}/encoder.int8.onnx")),
+            decoder: Some(format!("{asr_dir}/decoder.onnx")),
+            joiner: Some(format!("{asr_dir}/joiner.int8.onnx")),
         };
         model.tokens = Some(format!("{asr_dir}/tokens.txt"));
         model.num_threads = cfg.asr_threads;

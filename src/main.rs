@@ -139,9 +139,9 @@ fn check_models(cfg: &Config) -> bool {
     let dir = cfg.models.asr_dir.as_os_str().to_string_lossy();
     let tts_dir = cfg.models.tts_dir.as_os_str().to_string_lossy();
     [
-        format!("{dir}/encoder-epoch-99-avg-1.int8.onnx"),
-        format!("{dir}/decoder-epoch-99-avg-1.int8.onnx"),
-        format!("{dir}/joiner-epoch-99-avg-1.int8.onnx"),
+        format!("{dir}/encoder.int8.onnx"),
+        format!("{dir}/decoder.onnx"),
+        format!("{dir}/joiner.int8.onnx"),
         cfg.models.vad_model.as_os_str().to_string_lossy().into_owned(),
         format!("{tts_dir}/{}", cfg.models.tts_model_file),
         format!("{tts_dir}/voices.bin"),

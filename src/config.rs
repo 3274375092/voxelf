@@ -76,7 +76,7 @@ impl Default for BrainCfg {
 impl Default for ModelCfg {
     fn default() -> Self {
         Self {
-            asr_dir: "assets/models/asr-zh-14m".into(),
+            asr_dir: "assets/models/asr-zh".into(),
             vad_model: "assets/models/vad/silero_vad.onnx".into(),
             tts_dir: "assets/models/kokoro".into(),
             tts_model_file: "model.int8.onnx".into(),
