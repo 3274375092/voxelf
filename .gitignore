@@ -9,6 +9,12 @@ _src/
 _*.crate
 smoke_*.png
 diag_*.wav
-# 运行时日�?启动时自动创�?轮转)
+# 运行时日志(启动时自动创建、轮转)
 /voxelf.log
 /voxelf.log.*
+# 分发包产物(体积大,走 Releases 附件,不进仓库)
+/dist/
+/voxelf-win64.zip
+*.zip
+# playwright 调试产物
+/.playwright-cli/
