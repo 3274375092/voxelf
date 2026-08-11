@@ -52,7 +52,7 @@ cargo build --release
 |---|---|---|
 | `deepseek.api_key` | DeepSeek API Key,留空读环境变量 `DEEPSEEK_API_KEY` | 空 |
 | `deepseek.model` | 对话模型 | `deepseek-chat` |
-| `brain.kind` | `deepseek` / `agent` / `hybrid`(默认 hybrid: 有 jcode 走 agent,没有降级 DeepSeek) | `hybrid` |
+| `brain.kind` | `deepseek`(代码默认)/ `agent`(全走常驻 repl,无降级)/ `hybrid`(推荐: 有 jcode 全走 agent,没有自动降级 DeepSeek) | `deepseek` |
 | `models.asr_dir` | ASR 模型目录(纯中文 `asr-zh`,中英双语 `asr-zh-en-2025`) | `assets/models/asr-zh` |
 | `models.tts_kind` | `vits`(快)/ `kokoro`(音质好) | `vits` |
 | `models.vad_*` | VAD 静音/语音判定阈值,越低越不容易吞句尾 | 见模板 |
