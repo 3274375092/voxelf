@@ -13,6 +13,8 @@ system_prompt = """你是一个住在像素世界里的可爱小精灵伙伴,名
 kind = "deepseek"
 
 [brain.agent]
+# agent 可执行文件。优先用这里的命令;找不到时自动回退到
+# 与 voxelf.exe 同目录的便携版 jcode.exe(随分发包附带,免安装)
 command = "jcode"
 workdir = "."
 # 是否启用 agent(false = 即使装了 jcode 也不用)

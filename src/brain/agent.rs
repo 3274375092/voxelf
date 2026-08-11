@@ -122,15 +122,36 @@ impl AgentBrain {
         }
     }
 
-    /// 探测 agent 命令是否可用(用户机器上装了 jcode 才启用 agent 模式)。
-    pub fn available(command: &str) -> bool {
-        std::process::Command::new(command)
+    /// 探测命令是否可执行(非交互,stdout/stderr 丢弃)。
+    fn cmd_available(cmd: &str) -> bool {
+        std::process::Command::new(cmd)
             .arg("--version")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
+    }
+
+    /// 探测 agent 命令是否可用(用户机器上装了 jcode 才启用 agent 模式)。
+    /// 配置的 command 找不到时,回退探测与 voxelf 同目录的便携版 jcode.exe
+    /// (随分发包一起带的独立二进制)。
+    pub fn available(command: &str) -> bool {
+        Self::cmd_available(command)
+            || (!command.to_lowercase().ends_with(".exe") && Self::cmd_available("jcode.exe"))
+    }
+
+    /// 解析实际要启动的可执行文件: 配置的 command 优先;
+    /// 找不到时回退到同目录便携版 jcode.exe(分发包里随附)。
+    fn resolve_command(&self) -> String {
+        if Self::cmd_available(&self.cfg.command) {
+            return self.cfg.command.clone();
+        }
+        let portable = "jcode.exe";
+        if self.cfg.command != portable && Self::cmd_available(portable) {
+            return portable.to_string();
+        }
+        self.cfg.command.clone()
     }
 
     /// 启动(或重启)repl 进程。不预读输出: banner 与启动 prompt 由
@@ -141,7 +162,7 @@ impl AgentBrain {
         }
         self.kill().await;
 
-        let mut cmd = tokio::process::Command::new(&self.cfg.command);
+        let mut cmd = tokio::process::Command::new(self.resolve_command());
         cmd.arg("repl").arg("--quiet").arg("--no-update");
         if !self.cfg.provider.is_empty() {
             cmd.arg("-p").arg(&self.cfg.provider);
