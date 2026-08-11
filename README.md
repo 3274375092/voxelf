@@ -1,11 +1,11 @@
-# voxelf 🎧 语音交互像素桌宠
+﻿# voxelf 🎧 语音交互像素桌宠
 
 > 对着麦克风说话,像素小人会识别、思考、用语音回复你;还能接入 jcode agent,帮你联网查天气、读写文件、执行任务。
 
 **麦克风 → 流式 ASR → 大模型(DeepSeek / agent)→ 流式 TTS → 扬声器**,全程由一个像素小人动画化呈现。
 
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
-[![Platform](https://img.shields.io/badge/Platform-Windows-blue.svg)](https://gitee.com/18593101402/voxelf/releases)
+[![Platform](https://img.shields.io/badge/Platform-Windows-blue.svg)](https://gitee.com/fuchenDSG/voxelf/releases)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
@@ -21,7 +21,7 @@
 
 ## 🚀 快速开始(Windows 用户)
 
-1. 下载最新 `voxelf-win64.zip`([GitHub Releases](https://github.com/3274375092/voxelf/releases) / [Gitee 发行版](https://gitee.com/18593101402/voxelf/releases)),解压到任意目录
+1. 下载最新 `voxelf-win64.zip`([GitHub Releases](https://github.com/3274375092/voxelf/releases) / [Gitee 发行版](https://gitee.com/fuchenDSG/voxelf/releases)),解压到任意目录
 2. 双击 `voxelf.exe` 运行,桌面上出现像素小人,直接对它说话即可聊天
 3. 首次使用前配置 API Key(二选一):
    - 复制 `config.example.toml` 为 `config.toml`,填入 `[deepseek]` 下的 `api_key`
