@@ -1,120 +1,35 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 
+use super::adapters::{self, CliDialect, LineKind};
 use super::BrainEvent;
 use crate::config::AgentCfg;
 
-/// Agent 大脑:常驻 `jcode repl` 子进程,每轮请求写一行 stdin、按行读 stdout。
-/// repl 模式没有 `jcode run` 的 5.3s 冷启动开销,实测首轮 ~1.5s、后续每轮 ~0.7s。
+/// Agent 大脑:驱动一个命令行 coding agent 子进程干活。
 ///
-/// 输出格式(实测):
-/// ```text
-/// J-Code - Coding Agent              <- banner
-/// Type your message, or 'quit'...
-/// Available skills: ...
-/// > 你好!有什么可以帮你的吗?           <- "> " 前缀 + 回复文本(同一行)
-/// [Tokens] upload: 2023 ...
-/// >                                    <- 空 prompt = 本轮结束
-/// ```
-/// 工具调用轮:
-/// ```text
-/// > 
-/// [read] in_a.txt                     <- [工具名] 参数 → Working 事件
-/// [Tokens] upload: ...
-///  →     1    用一句话回答:你好            <- 工具结果回显(不朗读)
-/// `in_a.txt` 前3行内容:                <- 正文
-/// ...
-/// [Tokens] ...
-/// >                                    <- 轮结束
-/// ```
+/// 默认协议(jcode)是常驻 `jcode repl` 子进程:每轮请求写一行 stdin、按行读
+/// stdout,进程复用避开冷启动。协议差异(探测规则、启动参数、输出方言、
+/// 是否常驻)全部封装在 `adapters::CliDialect`,本结构只负责进程生命周期:
+/// 启动/重启/超时/行循环。one-shot 协议(DSH 等一次性 CLI)每轮新起进程,
+/// 收集 stdout 全文作为最终回复。
 pub struct AgentBrain {
     cfg: AgentCfg,
+    dialect: Box<dyn CliDialect>,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     reader: Option<Lines<BufReader<ChildStdout>>>,
-    /// 是否已完成启动排空(ready 状态)
+    /// 是否已完成启动排空(ready 状态,仅常驻 repl 协议)
     started: bool,
-}
-
-/// 行分类:决定如何对待 repl 的每一行输出。
-#[derive(Debug, Clone, PartialEq)]
-enum LineKind {
-    /// 启动 banner(标题/提示/技能列表)
-    Banner,
-    /// `[Tokens] upload: ...` 元信息
-    Tokens,
-    /// `[工具名] 参数` → agent 正在调用工具
-    ToolCall(String),
-    /// ` → 工具结果回显`
-    ToolResult,
-    /// `> ` 空 prompt(等待输入 / 本轮结束标记)
-    Prompt,
-    /// 空行
-    Empty,
-    /// `> 正文` 或纯正文行 → 流式文本
-    Text(String),
-}
-
-/// 把 repl 输出行分类。独立成函数方便单测。
-fn classify(line: &str) -> LineKind {
-    let line = line.trim_end_matches(['\r', '\n']);
-    if line.is_empty() {
-        return LineKind::Empty;
-    }
-    if line == "J-Code - Coding Agent"
-        || line.starts_with("Type your message")
-        || line.starts_with("Available skills:")
-    {
-        return LineKind::Banner;
-    }
-    if line.starts_with("[Tokens]") {
-        return LineKind::Tokens;
-    }
-    if line.trim_start().starts_with('→') {
-        // 工具结果回显: " →     1\t内容"(前缀空格数不固定)
-        return LineKind::ToolResult;
-    }
-    if line == ">" {
-        return LineKind::Prompt;
-    }
-    if let Some(rest) = line.strip_prefix("> ") {
-        // "> " 前缀:空 = prompt 标记;非空 = 回复文本
-        let rest = rest.trim();
-        if rest.is_empty() {
-            return LineKind::Prompt;
-        }
-        return LineKind::Text(rest.to_string());
-    }
-    if line.starts_with('[') {
-        // [工具名] 参数(排除 [Tokens] 已处理)
-        if let Some(end) = line.find(']') {
-            let name = &line[1..end];
-            if !name.is_empty()
-                && name.len() <= 32
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-            {
-                let rest = line[end + 1..].trim();
-                return LineKind::ToolCall(if rest.is_empty() {
-                    name.to_string()
-                } else {
-                    format!("{name} {rest}")
-                });
-            }
-        }
-        return LineKind::Text(line.to_string());
-    }
-    LineKind::Text(line.to_string())
 }
 
 impl AgentBrain {
     pub fn new(cfg: &AgentCfg) -> Self {
         Self {
             cfg: cfg.clone(),
+            dialect: adapters::from_config(cfg),
             child: None,
             stdin: None,
             reader: None,
@@ -122,57 +37,33 @@ impl AgentBrain {
         }
     }
 
-    /// 探测命令是否可执行(非交互,stdout/stderr 丢弃)。
-    fn cmd_available(cmd: &str) -> bool {
-        std::process::Command::new(cmd)
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+    /// 探测 agent CLI 是否可用(用户机器上装了对应命令才启用 agent 模式)。
+    /// 探测规则由协议适配器决定(jcode 会回退同目录便携版 jcode.exe)。
+    pub fn available(cfg: &AgentCfg) -> bool {
+        adapters::from_config(cfg).available(cfg)
     }
 
-    /// 探测 agent 命令是否可用(用户机器上装了 jcode 才启用 agent 模式)。
-    /// 配置的 command 找不到时,回退探测与 voxelf 同目录的便携版 jcode.exe
-    /// (随分发包一起带的独立二进制)。
-    pub fn available(command: &str) -> bool {
-        Self::cmd_available(command)
-            || (!command.to_lowercase().ends_with(".exe") && Self::cmd_available("jcode.exe"))
-    }
-
-    /// 解析实际要启动的可执行文件: 配置的 command 优先;
-    /// 找不到时回退到同目录便携版 jcode.exe(分发包里随附)。
-    fn resolve_command(&self) -> String {
-        if Self::cmd_available(&self.cfg.command) {
-            return self.cfg.command.clone();
+    /// 流式运行一轮。常驻 repl 协议复用进程、逐行解析;one-shot 协议
+    /// 每轮新起进程,stdout 全文作为一次 Delta + Done。
+    pub async fn run_streaming(&mut self, text: &str, tx: flume::Sender<BrainEvent>) {
+        if self.dialect.persistent() {
+            self.run_repl(text, tx).await;
+        } else {
+            self.run_one_shot(text, tx).await;
         }
-        let portable = "jcode.exe";
-        if self.cfg.command != portable && Self::cmd_available(portable) {
-            return portable.to_string();
-        }
-        self.cfg.command.clone()
     }
 
     /// 启动(或重启)repl 进程。不预读输出: banner 与启动 prompt 由
-    /// run_streaming 的分类逻辑惰性丢弃(它们不会触发文本事件)。
+    /// run_repl 的分类逻辑惰性丢弃(它们不会触发文本事件)。
     async fn ensure_started(&mut self) -> Result<()> {
         if self.started {
             return Ok(());
         }
         self.kill().await;
 
-        let mut cmd = tokio::process::Command::new(self.resolve_command());
-        cmd.arg("repl").arg("--quiet").arg("--no-update");
-        if !self.cfg.provider.is_empty() {
-            cmd.arg("-p").arg(&self.cfg.provider);
-        }
-        if self.cfg.tools.trim().is_empty() {
-            cmd.arg("--tool-profile").arg("minimal");
-        } else {
-            cmd.arg("--tools").arg(self.cfg.tools.trim());
-        }
-        cmd.current_dir(&self.cfg.workdir)
+        let mut cmd = tokio::process::Command::new(self.dialect.resolve_command(&self.cfg));
+        cmd.args(self.dialect.spawn_args(&self.cfg))
+            .current_dir(&self.cfg.workdir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null());
@@ -199,7 +90,8 @@ impl AgentBrain {
         self.started = false;
     }
 
-    pub async fn run_streaming(&mut self, text: &str, tx: flume::Sender<BrainEvent>) {
+    /// 常驻 repl 协议:写一行 stdin,逐行分类 stdout 直到本轮结束。
+    async fn run_repl(&mut self, text: &str, tx: flume::Sender<BrainEvent>) {
         let send = |e: BrainEvent| {
             let _ = tx.send(e);
         };
@@ -240,7 +132,7 @@ impl AgentBrain {
             tokio::select! {
                 line = self.reader.as_mut().expect("reader 存在").next_line() => {
                     match line {
-                        Ok(Some(l)) => match classify(&l) {
+                        Ok(Some(l)) => match self.dialect.classify(&l) {
                             LineKind::Prompt if got_output => break, // 空 prompt = 轮结束
                             LineKind::Empty => {
                                 if saw_tokens && got_output {
@@ -309,82 +201,114 @@ impl AgentBrain {
             summary
         }));
     }
+
+    /// one-shot 协议:每轮把 {prompt} 替换进参数、新起进程,收集 stdout。
+    /// 无流式:进程退出后把全文作为一次 Delta + Done(朗读整体退后到完成时)。
+    async fn run_one_shot(&mut self, text: &str, tx: flume::Sender<BrainEvent>) {
+        let send = |e: BrainEvent| {
+            let _ = tx.send(e);
+        };
+
+        let command = self.dialect.resolve_command(&self.cfg);
+        let args: Vec<String> = self
+            .dialect
+            .spawn_args(&self.cfg)
+            .into_iter()
+            .map(|a| a.replace("{prompt}", text))
+            .collect();
+
+        let mut cmd = tokio::process::Command::new(&command);
+        cmd.args(&args)
+            .current_dir(&self.cfg.workdir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                send(BrainEvent::Err(format!("启动 agent {command} 失败: {e}")));
+                return;
+            }
+        };
+        let mut stdout = child.stdout.take().expect("agent stdout 可用");
+        let mut stderr = child.stderr.take().expect("agent stderr 可用");
+        let out_task = tokio::spawn(async move {
+            let mut buf = String::new();
+            let _ = stdout.read_to_string(&mut buf).await;
+            buf
+        });
+        let err_task = tokio::spawn(async move {
+            let mut buf = String::new();
+            let _ = stderr.read_to_string(&mut buf).await;
+            buf
+        });
+
+        let timeout = Duration::from_secs(self.cfg.timeout_secs.max(10));
+        let ok = match tokio::time::timeout(timeout, child.wait()).await {
+            Ok(Ok(s)) => s.success(),
+            Ok(Err(e)) => {
+                send(BrainEvent::Err(format!("等待 agent {command} 失败: {e}")));
+                return;
+            }
+            Err(_) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                out_task.abort();
+                err_task.abort();
+                send(BrainEvent::Err(format!(
+                    "agent 响应超时(>{}s),已终止",
+                    self.cfg.timeout_secs
+                )));
+                return;
+            }
+        };
+
+        let stdout_text = out_task.await.unwrap_or_default();
+        let stderr_text = err_task.await.unwrap_or_default();
+        let reply = stdout_text.trim().to_string();
+
+        if !ok {
+            let detail: String = stderr_text.trim().chars().take(300).collect();
+            if reply.is_empty() {
+                send(BrainEvent::Err(if detail.is_empty() {
+                    format!("agent {command} 执行失败(无输出)")
+                } else {
+                    format!("agent {command} 执行失败: {detail}")
+                }));
+                return;
+            }
+            // 退出码非 0 但仍有输出: 播报输出,同时记录错误细节
+            tracing::warn!("agent {command} 退出码非 0,stderr: {detail}");
+        }
+
+        if reply.is_empty() {
+            send(BrainEvent::Done("任务完成".into()));
+            return;
+        }
+        send(BrainEvent::Delta(reply.clone()));
+        let summary: String = reply.chars().take(160).collect();
+        send(BrainEvent::Done(summary));
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::classify;
-    use super::LineKind;
-
-    #[test]
-    fn classifies_banner_lines() {
-        assert_eq!(classify("J-Code - Coding Agent"), LineKind::Banner);
-        assert_eq!(
-            classify("Type your message, or 'quit' to exit."),
-            LineKind::Banner
-        );
-        assert!(matches!(
-            classify("Available skills: /ask-matt, /tdd, ..."),
-            LineKind::Banner
-        ));
-    }
-
-    #[test]
-    fn classifies_token_and_tool_lines() {
-        assert_eq!(
-            classify("[Tokens] upload: 2023 download: 34"),
-            LineKind::Tokens
-        );
-        assert_eq!(
-            classify("[read] in_a.txt"),
-            LineKind::ToolCall("read in_a.txt".into())
-        );
-        assert_eq!(
-            classify("[bash]"),
-            LineKind::ToolCall("bash".into())
-        );
-        // 工具结果回显(前缀空格数不固定)
-        assert_eq!(classify(" →     1\t用一句话回答:你好"), LineKind::ToolResult);
-        assert_eq!(classify("  →     1\t# voxelf 配置"), LineKind::ToolResult);
-        assert_eq!(classify("→ 1\t内容"), LineKind::ToolResult);
-    }
-
-    #[test]
-    fn classifies_prompt_and_text() {
-        assert_eq!(classify("> "), LineKind::Prompt);
-        assert_eq!(classify(">"), LineKind::Prompt);
-        assert_eq!(
-            classify("> 你好!有什么可以帮你的吗?"),
-            LineKind::Text("你好!有什么可以帮你的吗?".into())
-        );
-        assert_eq!(
-            classify("`in_a.txt` 前3行内容:"),
-            LineKind::Text("`in_a.txt` 前3行内容:".into())
-        );
-        assert_eq!(classify(""), LineKind::Empty);
-        // markdown 引用行不会被误判为 Prompt(带内容)
-        assert_eq!(
-            classify("> 这是引用内容"),
-            LineKind::Text("这是引用内容".into())
-        );
-    }
+    use super::AgentBrain;
+    use crate::brain::BrainEvent;
+    use crate::config::AgentCfg;
 
     /// 真实 repl 集成测试:两轮连续对话,验证常驻进程复用
     /// (第二轮应明显快于第一轮,不重复冷启动)。无 jcode 的机器自动跳过。
     #[tokio::test]
     async fn repl_round_trip() {
-        use crate::brain::agent::AgentBrain;
-        use crate::brain::BrainEvent;
-        use crate::config::AgentCfg;
-
-        if !AgentBrain::available("jcode") {
-            eprintln!("SKIP: 未安装 jcode");
-            return;
-        }
         let cfg = AgentCfg {
             timeout_secs: 60,
             ..Default::default()
         };
+        if !AgentBrain::available(&cfg) {
+            eprintln!("SKIP: 未安装 jcode");
+            return;
+        }
         let mut b = AgentBrain::new(&cfg);
         let mut times = Vec::new();
         for prompt in ["用一句话回答:你好", "用一句话回答:1加1等于几"] {
@@ -417,5 +341,58 @@ mod tests {
             times[0],
             times[1]
         );
+    }
+
+    /// one-shot 协议集成测试:用系统自带 cmd echo 当假 CLI,验证
+    /// {prompt} 替换、stdout 全文 → Delta + Done。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn one_shot_round_trip_with_fake_cli() {
+        let cfg = AgentCfg {
+            command: "cmd".into(),
+            protocol: "one-shot".into(),
+            args: vec!["/C".into(), "echo".into(), "{prompt}".into()],
+            ..Default::default()
+        };
+        let mut b = AgentBrain::new(&cfg);
+        let (tx, rx) = flume::unbounded::<BrainEvent>();
+        b.run_streaming("你好 vox", tx).await;
+        let evs: Vec<_> = rx.drain().collect();
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, BrainEvent::Delta(d) if d.contains("你好 vox"))),
+            "应把 stdout 全文作为 Delta: {evs:?}"
+        );
+        assert!(
+            evs.iter().any(|e| matches!(e, BrainEvent::Done(_))),
+            "应收到 Done: {evs:?}"
+        );
+    }
+
+    /// one-shot 协议:CLI 非 0 退出且无输出 → Err 事件(带 stderr 摘要)。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn one_shot_error_when_cli_exits_nonzero() {
+        let cfg = AgentCfg {
+            command: "cmd".into(),
+            protocol: "one-shot".into(),
+            args: vec![
+                "/C".into(),
+                "echo boom 1>&2 & exit /b 7".into(),
+            ],
+            ..Default::default()
+        };
+        let mut b = AgentBrain::new(&cfg);
+        let (tx, rx) = flume::unbounded::<BrainEvent>();
+        b.run_streaming("随便什么", tx).await;
+        let evs: Vec<_> = rx.drain().collect();
+        let err = evs
+            .iter()
+            .find_map(|e| match e {
+                BrainEvent::Err(m) => Some(m.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("应收到 Err: {evs:?}"));
+        assert!(err.contains("boom"), "Err 应带 stderr 摘要: {err}");
     }
 }

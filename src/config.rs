@@ -31,12 +31,17 @@ pub struct BrainCfg {
 pub struct AgentCfg {
     pub command: String,
     pub workdir: PathBuf,
-    /// 是否启用 agent(false = 即使装了 jcode 也不用)
+    /// 是否启用 agent(false = 即使装了对应 CLI 也不用)
     pub enabled: bool,
-    /// 传给 `jcode repl -p <provider>` 的 provider;留空用 jcode 自动探测
+    /// 适配协议: jcode(默认,常驻 repl)| one-shot(每轮新进程,DSH 等一次性 CLI)
+    pub protocol: String,
+    /// one-shot 协议的启动参数模板,{prompt} 会被替换为用户输入;
+    /// 空则默认把输入作为唯一参数
+    pub args: Vec<String>,
+    /// 传给 `jcode repl -p <provider>` 的 provider;留空用 jcode 自动探测(仅 jcode 协议)
     pub provider: String,
     /// 工具白名单(逗号分隔,如 read,write,edit,bash);
-    /// 空则用 --tool-profile minimal(只读工具集)
+    /// 空则用 --tool-profile minimal(只读工具集,仅 jcode 协议)
     pub tools: String,
     /// 单轮 agent 响应超时(秒),超时后杀掉进程并报错
     pub timeout_secs: u64,
@@ -84,6 +89,8 @@ impl Default for AgentCfg {
             command: "jcode".into(),
             workdir: ".".into(),
             enabled: true,
+            protocol: "jcode".into(),
+            args: Vec::new(),
             provider: "deepseek".into(),
             tools: String::new(),
             timeout_secs: 120,
@@ -158,6 +165,29 @@ mod tests {
         assert_eq!(cfg.models.tts_kind, "vits");
         assert_eq!(cfg.models.vad_min_silence, 0.5);
         assert_eq!(cfg.brain.agent.command, "jcode");
+        assert_eq!(cfg.brain.agent.protocol, "jcode");
+    }
+
+    /// one-shot 协议配置(接 DeepSeek Harness 的 dsh --profile headless)。
+    #[test]
+    fn one_shot_agent_config_parses() {
+        let text = r#"
+            [brain]
+            kind = "hybrid"
+
+            [brain.agent]
+            command = "dsh"
+            protocol = "one-shot"
+            args = ["--profile", "headless", "{prompt}"]
+        "#;
+        let cfg: Config = toml::from_str(text).expect("one-shot 配置应能解析");
+        assert_eq!(cfg.brain.kind, "hybrid");
+        assert_eq!(cfg.brain.agent.command, "dsh");
+        assert_eq!(cfg.brain.agent.protocol, "one-shot");
+        assert_eq!(
+            cfg.brain.agent.args,
+            vec!["--profile", "headless", "{prompt}"]
+        );
     }
 
     /// 未知字段(如旧版本遗留的 [ui] 段)应被忽略,不能导致启动失败。

@@ -9,21 +9,32 @@ model = "deepseek-chat"
 system_prompt = """你是一个住在像素世界里的可爱小精灵伙伴,名字叫 Vox。用简短、口语化的中文回复,每次不超过 3 句话。语气活泼、温暖、有点俏皮。回复是要被语音合成朗读出来的,不要使用列表、markdown 符号或表情符号。句子之间用句号或感叹号分隔,方便语音流式播放。"""
 
 [brain]
-# deepseek | agent(全走常驻 repl,无降级) | hybrid(默认: 有 jcode 全走 agent,没有自动降级 DeepSeek)
+# deepseek | agent(全走 agent CLI,无降级) | hybrid(推荐: 有 agent CLI 全走 agent,没有自动降级 DeepSeek)
 kind = "deepseek"
 
 [brain.agent]
-# agent 可执行文件。优先用这里的命令;找不到时自动回退到
+# agent 可执行文件。优先用这里的命令;jcode 协议下找不到时自动回退到
 # 与 voxelf.exe 同目录的便携版 jcode.exe(随分发包附带,免安装)
 command = "jcode"
 workdir = "."
-# 是否启用 agent(false = 即使装了 jcode 也不用)
+# 是否启用 agent(false = 即使装了对应 CLI 也不用)
 enabled = true
-# 传给 `jcode repl -p` 的 provider; 留空用 jcode 自动探测
+# 适配协议: jcode(默认,常驻 repl,流式增量 + 工具动画 + 跨轮记忆)
+#           one-shot(每轮新起进程,stdout 全文为最终回复,无流式)
+protocol = "jcode"
+# one-shot 协议的启动参数模板,{prompt} 会被替换为用户输入;空 = ["{prompt}"]。
+# 接 DeepSeek Harness 示例(npm i -g @deepseek-ai/dsh,首次跑会自动初始化 headless profile):
+# command = "dsh"
+# protocol = "one-shot"
+# args = ["--profile", "headless", "{prompt}"]
+args = []
+# 传给 `jcode repl -p` 的 provider; 留空用 jcode 自动探测(仅 jcode 协议)
 provider = "deepseek"
-# 工具白名单(逗号分隔 read,write,edit,bash,websearch,webfetch...); 空 = 内置 minimal 只读工具集
+# 工具白名单(逗号分隔 read,write,edit,bash,websearch,webfetch...);
+# 空 = 内置 minimal 只读工具集(仅 jcode 协议)
 tools = ""
-# 单轮 agent 响应超时(秒),超时后杀掉进程并报错
+# 单轮 agent 响应超时(秒),超时后杀掉进程并报错。
+# one-shot 协议每轮含 CLI 冷启动 + 模型调用,建议 ≥ 300
 timeout_secs = 120
 
 [models]

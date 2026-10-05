@@ -1,3 +1,4 @@
+pub mod adapters;
 pub mod agent;
 pub mod deepseek;
 pub mod hybrid;

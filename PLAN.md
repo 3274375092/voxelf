@@ -90,8 +90,9 @@ voxelf/
     ├── brain/
     │   ├── mod.rs         # BrainEvent 事件流 + BrainKind 分发(enum,非 trait)
     │   ├── deepseek.rs    # SSE 流式聊天
-    │   ├── agent.rs       # 常驻 jcode repl 进程适配(行解析/超时/重启)
-    │   └── hybrid.rs      # 双层大脑: agent-first,无 jcode 自动降级 DeepSeek
+    │   ├── agent.rs       # CLI agent 进程框架(启动/重启/超时/行循环)
+    │   ├── adapters/      # 协议适配器: jcode(常驻 repl)/ one-shot(DSH 等)
+    │   └── hybrid.rs      # 双层大脑: agent-first,无 agent CLI 自动降级 DeepSeek
     ├── tray.rs            # 系统托盘(独立线程事件转发 + 去抖)
     └── ui/
         ├── app.rs         # eframe 桌宠窗口(像素电视/字幕/托盘同步)
@@ -112,6 +113,7 @@ enum BrainEvent { Delta(String), Done(String), Err(String), Working(String) }
 - **双层大脑(agent-first,`hybrid.rs`)**:检测到 jcode 时**所有**请求都走常驻 agent(工具/联网/上下文记忆全具备),未安装或禁用时自动降级纯 DeepSeek。每轮请求注入 Vox 人设(简短口语化、无列表/markdown/emoji、句号分隔),保证语音朗读体验与 DeepSeek 直连一致。
 - **安全**:默认 `--tool-profile minimal`(只读工具集),或 `--tools read,write,edit,websearch,webfetch` 白名单(联网搜索/抓取,实测天气查询:websearch 被 DDG 反爬拦截时 agent 自动降级 webfetch 抓 wttr.in);`timeout_secs` 超时自动杀进程重启。
 - Brain 以 `BrainKind` enum(DeepSeek/Agent/Hybrid)+ 事件流接口提供,UI/音频层不感知差异。
+- **协议可插拔(M4.5)**:`brain/adapters/` 的 `CliDialect` trait 封装探测规则/启动参数/输出方言/驻留方式;`protocol = "jcode"`(默认,常驻 repl)与 `protocol = "one-shot"`(每轮新进程,`args` 模板 `{prompt}` 替换输入,stdout 全文为回复)开箱即用,接 DeepSeek Harness(`dsh --profile headless "{prompt}"`)只需改配置。one-shot 无流式增量/工具事件/进程复用,靠人设提示词维持口播风格。
 
 ## 7. 里程碑(按序交付)
 
@@ -122,6 +124,7 @@ enum BrainEvent { Delta(String), Done(String), Err(String), Working(String) }
 | M2 | + DeepSeek API + TTS + 播放,终端闭环跑通 | ✅ 完成 |
 | M3 | 状态机 + 各阶段动画 + 波形可视化 | ✅ 完成(颜文字方案) |
 | M4 | Brain 拆分 + jcode repl 常驻适配(Working 动画,双层大脑) | ✅ 完成 |
+| M4.5 | agent 协议可插拔(CliDialect trait):jcode repl / one-shot(DeepSeek Harness 等任意 CLI) | ✅ 完成 |
 | M5 | 语音打断(barge-in)、上下文记忆、情绪系统、打包分发 | 2–3 天 |
 | M6 | agent 输出清洗(代码块/过程文本→纯口语)、语音打断、上下文记忆增强 | 1–2 天 |
 

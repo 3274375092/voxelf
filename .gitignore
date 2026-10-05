@@ -18,3 +18,5 @@ diag_*.wav
 *.zip
 # playwright 调试产物
 /.playwright-cli/
+# 选型调研临时目录(sherpa-onnx 源码/npm 包/DLL 冒烟产物,约 115MB)
+/.research-tmp/

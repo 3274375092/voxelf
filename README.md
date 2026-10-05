@@ -1,6 +1,6 @@
-﻿# voxelf 🎧 语音交互像素桌宠
+# voxelf 🎧 语音交互像素桌宠
 
-> 对着麦克风说话,像素小人会识别、思考、用语音回复你;还能接入 jcode agent,帮你联网查天气、读写文件、执行任务。
+> 对着麦克风说话,像素小人会识别、思考、用语音回复你;还能接入 agent CLI(jcode 默认,可换 DeepSeek Harness),帮你联网查天气、读写文件、执行任务。
 
 **麦克风 → 流式 ASR → 大模型(DeepSeek / agent)→ 流式 TTS → 扬声器**,全程由一个像素小人动画化呈现。
 
@@ -16,7 +16,7 @@
 - 🧠 **DeepSeek 流式对话**:SSE 逐字输出,回复随出随播
 - 🔊 **分句流式 TTS**:vits-zh 首句 0.15s 极速响应,可一键切换 kokoro 音色
 - 🖥️ **像素电视桌宠**:32x32 像素网格 + CRT 效果,颜文字状态动画(听/想/说/干活/出错),透明置顶窗口 + 系统托盘
-- 🤖 **agent 双层大脑**:检测到 jcode 自动走常驻 repl(工具调用 / 联网搜索 / 上下文记忆),没装就自动降级 DeepSeek
+- 🤖 **agent 双层大脑**:检测到 agent CLI(jcode 默认,常驻 repl:工具调用 / 联网搜索 / 上下文记忆)全走 agent,没装就自动降级 DeepSeek;也可切换 one-shot 协议接 DeepSeek Harness 等任意 CLI
 - 📦 **便携分发包**:免安装开箱即用,自带模型与 jcode.exe
 
 ## 🚀 快速开始(Windows 用户)
@@ -52,7 +52,8 @@ cargo build --release
 |---|---|---|
 | `deepseek.api_key` | DeepSeek API Key,留空读环境变量 `DEEPSEEK_API_KEY` | 空 |
 | `deepseek.model` | 对话模型 | `deepseek-chat` |
-| `brain.kind` | `deepseek`(代码默认)/ `agent`(全走常驻 repl,无降级)/ `hybrid`(推荐: 有 jcode 全走 agent,没有自动降级 DeepSeek) | `deepseek` |
+| `brain.kind` | `deepseek`(代码默认)/ `agent`(全走 agent CLI,无降级)/ `hybrid`(推荐: 有 agent CLI 全走 agent,没有自动降级 DeepSeek) | `deepseek` |
+| `brain.agent.protocol` | `jcode`(默认,常驻 repl)/ `one-shot`(每轮新进程,DSH 等一次性 CLI,`args` 模板含 `{prompt}`) | `jcode` |
 | `models.asr_dir` | ASR 模型目录(纯中文 `asr-zh`,中英双语 `asr-zh-en-2025`) | `assets/models/asr-zh` |
 | `models.tts_kind` | `vits`(快)/ `kokoro`(音质好) | `vits` |
 | `models.vad_*` | VAD 静音/语音判定阈值,越低越不容易吞句尾 | 见模板 |
@@ -82,6 +83,20 @@ voxelf latency             # 各阶段延迟定位
 
 安全默认:`[brain.agent]` 使用 `minimal` 只读工具集;需要联网/写文件时用 `tools` 白名单,如 `read,write,edit,websearch,webfetch`。单轮超时(默认 120s)自动杀进程重启。
 
+### 换成 DeepSeek Harness(或任意 one-shot CLI)
+
+`[brain.agent]` 的 `protocol = "one-shot"` 让 voxelf 每轮新起一个 CLI 进程、把用户输入塞进参数模板、读 stdout 全文作为回复,因此能接任何"一次性任务 + stdout 结果"的 CLI:
+
+```toml
+[brain.agent]
+command = "dsh"                                  # npm i -g @deepseek-ai/dsh
+protocol = "one-shot"
+args = ["--profile", "headless", "{prompt}"]     # {prompt} 替换为用户输入
+timeout_secs = 300                               # 每轮含 CLI 冷启动 + 模型调用
+```
+
+与 jcode repl 的差别:无流式增量(回复整段播报)、无"干活"动画、跨轮记忆由人设提示词维持;但换来**任意 CLI 都能接**(claude -p、gemini 等同理)。
+
 ## 🏗️ 架构
 
 所有模块(音频、ASR、大脑、TTS)只向**状态总线**发事件,渲染层只消费状态;换大脑时 UI 和音频层零改动。
@@ -92,7 +107,7 @@ flowchart LR
     VAD -->|语音段| ASR[sherpa-onnx 流式 ASR]
     ASR -->|文本| BRAIN{BrainKind}
     BRAIN -->|聊天| DS[DeepSeek API SSE]
-    BRAIN -->|指令| AG[agent: jcode/pi 子进程]
+    BRAIN -->|指令| AG[agent CLI: jcode repl / dsh one-shot]
     DS -->|回复文本| TTS[TTS 合成]
     AG -->|事件流| TTS
     TTS -->|PCM| OUT[扬声器 rodio]
@@ -126,8 +141,9 @@ voxelf/
     ├── tts.rs             # vits/kokoro 合成
     ├── brain/             # BrainEvent 事件流 + BrainKind 分发
     │   ├── deepseek.rs    # SSE 流式聊天
-    │   ├── agent.rs       # 常驻 jcode repl 进程适配
-    │   └── hybrid.rs      # 双层大脑: agent-first,无 jcode 自动降级
+    │   ├── agent.rs       # CLI agent 进程框架(启动/重启/超时/行循环)
+    │   ├── adapters/      # 协议适配器: jcode(常驻 repl)/ one-shot(DSH 等)
+    │   └── hybrid.rs      # 双层大脑: agent-first,无 agent CLI 自动降级
     ├── tray.rs            # 系统托盘
     └── ui/                # 桌宠窗口(像素电视/字幕)+ 颜文字动画
 ```
@@ -141,6 +157,7 @@ voxelf/
 | M2 | + DeepSeek + TTS + 播放,终端闭环 | ✅ |
 | M3 | 状态机 + 颜文字动画 + 波形可视化 | ✅ |
 | M4 | Brain 拆分 + jcode repl 常驻(Working 动画,双层大脑) | ✅ |
+| M4.5 | agent 协议可插拔: jcode repl / one-shot(DeepSeek Harness 等任意 CLI) | ✅ |
 | M5 | 语音打断(barge-in)、上下文记忆、情绪系统 | 🚧 计划中 |
 | M6 | agent 输出清洗、打断、记忆增强 | 🚧 计划中 |
 

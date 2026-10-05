@@ -1,11 +1,14 @@
 use super::{agent::AgentBrain, deepseek::DeepSeekBrain, BrainEvent};
 use crate::config::Config;
 
-/// 双层大脑(agent-first):检测到 jcode 时**所有**请求都走常驻 agent
-/// (带 Vox 人设,工具/联网/上下文记忆全具备);未安装或禁用时自动降级纯 DeepSeek。
+/// 双层大脑(agent-first):检测到 agent CLI(默认 jcode,可配 DSH 等)时
+/// **所有**请求都走 agent(带 Vox 人设,工具/联网/上下文记忆全具备);
+/// 未安装或禁用时自动降级纯 DeepSeek。
 pub struct HybridBrain {
     deepseek: DeepSeekBrain,
     agent: Option<AgentBrain>,
+    /// agent CLI 名称(日志用,agent 为 None 时保留配置值)
+    agent_command: String,
 }
 
 /// Vox 人设注入:让 agent 的输出与 DeepSeek 直连保持一致的口语化风格
@@ -24,8 +27,8 @@ fn persona_prompt(text: &str) -> String {
 impl HybridBrain {
     pub fn new(cfg: &Config) -> Self {
         let deepseek = DeepSeekBrain::new(&cfg.deepseek);
-        // jcode 可用才启用 agent;否则整个 hybrid 退化为纯 DeepSeek
-        let agent = if cfg.brain.agent.enabled && AgentBrain::available(&cfg.brain.agent.command) {
+        // agent CLI 可用才启用 agent;否则整个 hybrid 退化为纯 DeepSeek
+        let agent = if cfg.brain.agent.enabled && AgentBrain::available(&cfg.brain.agent) {
             Some(AgentBrain::new(&cfg.brain.agent))
         } else {
             None
@@ -37,12 +40,19 @@ impl HybridBrain {
                 cfg.brain.agent.command
             );
         }
-        Self { deepseek, agent }
+        Self {
+            deepseek,
+            agent,
+            agent_command: cfg.brain.agent.command.clone(),
+        }
     }
 
     pub async fn run_streaming(&mut self, text: &str, tx: flume::Sender<BrainEvent>) {
         if let Some(agent) = &mut self.agent {
-            tracing::info!("[hybrid] agent-first → jcode: {text}");
+            tracing::info!(
+                "[hybrid] agent-first → {}: {text}",
+                self.agent_command
+            );
             // 不预先发 Working: 闲聊保持"思考"动画,只有真实工具调用才切"干活"
             agent.run_streaming(&persona_prompt(text), tx).await;
             return;
